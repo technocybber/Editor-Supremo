@@ -1120,11 +1120,13 @@
       return { byDay: byDay, hasAny: hasAny };
     }
 
-    function ohFindOpenRange(byDay, day, mins) {
+    function ohFindOpenRange(byDay, day, mins, overnightOnly) {
       const list = byDay[day] || [];
       for (let i = 0; i < list.length; i++) {
         const r = list[i];
-        if ((mins >= r.start && mins < r.end) || (mins + 1440 >= r.start && mins + 1440 < r.end)) return r;
+        if (overnightOnly) {
+          if (mins + 1440 >= r.start && mins + 1440 < r.end) return r;
+        } else if ((mins >= r.start && mins < r.end) || (mins + 1440 >= r.start && mins + 1440 < r.end)) return r;
       }
       return null;
     }
@@ -1148,7 +1150,7 @@
         return { open: true, tone: 'green', label: 'Aberto agora:', detail: 'Dentro do horário de hoje (' + ohRangeLabel(todayHit) + ')' };
       }
 
-      const yesterdayHit = ohFindOpenRange(parsed.byDay, yesterday, mins);
+      const yesterdayHit = ohFindOpenRange(parsed.byDay, yesterday, mins, true);
       if (yesterdayHit) {
         return { open: true, tone: 'green', label: 'Aberto agora:', detail: 'Dentro do horário iniciado ontem (' + ohRangeLabel(yesterdayHit) + ')' };
       }
@@ -2892,8 +2894,9 @@
       const today = now.getDay();
       const yest = (today + 6) % 7;
       const mins = now.getHours() * 60 + now.getMinutes();
-      const hit = list => (list || []).some(r => (mins >= r.start && mins < r.end) || (mins + 1440 >= r.start && mins + 1440 < r.end));
-      return hit(OH_SCHEDULE[today]) || hit(OH_SCHEDULE[yest]);
+      const hitToday = list => (list || []).some(r => (mins >= r.start && mins < r.end) || (mins + 1440 >= r.start && mins + 1440 < r.end));
+      const hitYesterday = list => (list || []).some(r => (mins + 1440 >= r.start && mins + 1440 < r.end));
+      return hitToday(OH_SCHEDULE[today]) || hitYesterday(OH_SCHEDULE[yest]);
     }
 
     function updateOpenStatus() {
@@ -3805,8 +3808,9 @@
       const today = now.getDay();
       const yest = (today + 6) % 7;
       const mins = now.getHours() * 60 + now.getMinutes();
-      const hit = list => (list || []).some(r => (mins >= r.start && mins < r.end) || (mins + 1440 >= r.start && mins + 1440 < r.end));
-      return hit(OH_SCHEDULE[today]) || hit(OH_SCHEDULE[yest]);
+      const hitToday = list => (list || []).some(r => (mins >= r.start && mins < r.end) || (mins + 1440 >= r.start && mins + 1440 < r.end));
+      const hitYesterday = list => (list || []).some(r => (mins + 1440 >= r.start && mins + 1440 < r.end));
+      return hitToday(OH_SCHEDULE[today]) || hitYesterday(OH_SCHEDULE[yest]);
     }
 
     function updateOpenStatus() {
