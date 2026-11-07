@@ -921,6 +921,13 @@
       return (val || '').replace(/desenvolvido\s+por\s*:?\s*/gi, '').trim() || 'https://technocybber.vercel.app/';
     }
 
+    function waNumber(num) {
+      const d = String(num == null ? '' : num).replace(/[^0-9]/g, '');
+      if (d.length >= 12 && d.indexOf('55') === 0) return d;
+      if (d.length === 10 || d.length === 11) return '55' + d;
+      return d;
+    }
+
     function getActiveStore() {
       return currentCatalogMode === 'standard' ? standardStore : eventStore;
     }
@@ -1758,7 +1765,7 @@
       text += `*Taxa:* ${fee > 0 ? 'R$ ' + fee.toFixed(2).replace('.', ',') : 'Grátis'}\n`;
       text += `*Total:* R$ ${(sub + fee).toFixed(2).replace('.', ',')}`;
 
-      window.open(`https://wa.me/${(standardStore.whatsapp || '').replace(/\D/g, '')}?text=${encodeURIComponent(text)}`, '_blank');
+      window.open(`https://wa.me/${waNumber(standardStore.whatsapp)}?text=${encodeURIComponent(text)}`, '_blank');
       closeSimStandardCheckoutModal();
     }
 
@@ -1846,7 +1853,7 @@
         text += `\n*Total dos Pratos:* R$ ${totalVal.toFixed(2).replace('.', ',')}\n`;
       }
 
-      window.open(`https://wa.me/${(eventStore.whatsapp || '').replace(/\D/g, '')}?text=${encodeURIComponent(text)}`, '_blank');
+      window.open(`https://wa.me/${waNumber(eventStore.whatsapp)}?text=${encodeURIComponent(text)}`, '_blank');
       closeSimQuoteModal();
     }
 
@@ -2155,6 +2162,20 @@
         border-color: #d6d3d1 !important;
       }
       .app-footer { border-color: #e7e5e4 !important; }
+    }
+
+    /* ===== RESPONSIVO (tablet e desktop) ===== */
+    @media (min-width: 640px) {
+      #main-app { max-width: 640px; }
+      div.fixed.bottom-0 { max-width: 640px; }
+      #catalog-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+      #catalog-list > * + * { margin-top: 0; }
+      #event-quote-modal > div { max-width: 560px; }
+    }
+    @media (min-width: 1024px) {
+      #main-app { max-width: 900px; }
+      div.fixed.bottom-0 { max-width: 900px; }
+      #catalog-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
   </style>
 </head>
@@ -2672,7 +2693,7 @@
       });
       localStorage.setItem('BUFFET_QUOTES_' + (store.name || 'STORE'), JSON.stringify(quotesList));
 
-      window.open('https://wa.me/' + (store.whatsapp || '').replace(/\\D/g, '') + '?text=' + encodeURIComponent(text), '_blank');
+      window.open('https://wa.me/' + waNumber(store.whatsapp) + '?text=' + encodeURIComponent(text), '_blank');
       closeEventQuoteModal();
     }
 
@@ -2906,6 +2927,13 @@
       return true;
     }
 
+    function waNumber(num) {
+      const d = String(num == null ? '' : num).replace(/[^0-9]/g, '');
+      if (d.length >= 12 && d.indexOf('55') === 0) return d;
+      if (d.length === 10 || d.length === 11) return '55' + d;
+      return d;
+    }
+
     function init() {
       if (checkExpiration()) return;
       attachClientDateBlock();
@@ -2992,6 +3020,20 @@
         box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.25) !important;
       }
       .app-footer { border-color: #e2e8f0 !important; }
+    }
+
+    /* ===== RESPONSIVO (tablet e desktop) ===== */
+    @media (min-width: 640px) {
+      #main-app { max-width: 640px; }
+      div.fixed.bottom-0 { max-width: 640px; }
+      #catalog-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+      #catalog-list > * + * { margin-top: 0; }
+      #checkout-modal > div { max-width: 560px; }
+    }
+    @media (min-width: 1024px) {
+      #main-app { max-width: 900px; }
+      div.fixed.bottom-0 { max-width: 900px; }
+      #catalog-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
   </style>
 </head>
@@ -3544,7 +3586,7 @@
       localStorage.setItem('DELIVERY_ORDERS_' + (store.name || 'STORE'), JSON.stringify(existingOrders));
       localStorage.setItem('DELIVERY_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items, store }));
 
-      const cleanPhone = (store.whatsapp || '').replace(/\\D/g, '');
+      const cleanPhone = waNumber(store.whatsapp);
       window.open('https://wa.me/' + cleanPhone + '?text=' + encodeURIComponent(msg), '_blank');
 
       cart = {};
@@ -3798,6 +3840,13 @@
       return true;
     }
 
+    function waNumber(num) {
+      const d = String(num == null ? '' : num).replace(/[^0-9]/g, '');
+      if (d.length >= 12 && d.indexOf('55') === 0) return d;
+      if (d.length === 10 || d.length === 11) return '55' + d;
+      return d;
+    }
+
     function init() {
       if (checkExpiration()) return;
       renderCategoryTabs();
@@ -3814,6 +3863,14 @@
 
     function downloadExportedHtml() {
       const isEvent = currentCatalogMode === 'event';
+      try {
+        const st = getActiveStore();
+        const hoursEl = document.getElementById('cfg-hours');
+        const wpEl = document.getElementById('cfg-whatsapp');
+        if (hoursEl) st.openingHours = hoursEl.value.trim();
+        if (wpEl && wpEl.value.trim()) st.whatsapp = wpEl.value.trim();
+        if (currentCatalogMode === 'standard') saveStandardCache(); else saveEventCache();
+      } catch (err) {}
       const fileContent = buildExportedClientHtml(isEvent);
       const fileName = isEvent ? 'cardapio-evento.html' : 'cardapio-digital.html';
       const blob = new Blob([fileContent], { type: 'text/html;charset=utf-8' });
