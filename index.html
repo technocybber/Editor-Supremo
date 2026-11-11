@@ -936,6 +936,17 @@
       return currentCatalogMode === 'standard' ? standardItems : eventItems;
     }
 
+    function setSharedItems(items) {
+      const nextItems = Array.isArray(items) ? items : [];
+      if (currentCatalogMode === 'standard') {
+        standardItems = nextItems;
+        saveStandardCache();
+      } else {
+        eventItems = nextItems;
+        saveEventCache();
+      }
+    }
+
     function handleSimLogoClick() {
       simLogoClicks++;
       clearTimeout(simLogoTimer);
@@ -1235,13 +1246,8 @@
         image: document.getElementById('form-image').value.trim() || 'https://i.pinimg.com/1200x/1c/b4/d1/1cb4d1e0f35b8dfd5481c5d3c7219269.jpg'
       };
 
-      if (currentCatalogMode === 'standard') {
-        standardItems.unshift(newItem);
-        saveStandardCache();
-      } else {
-        eventItems.unshift(newItem);
-        saveEventCache();
-      }
+      setSharedItems([newItem, ...getActiveItems()]);
+      agendarEnvioEstoqueEditor();
 
       document.getElementById('form-name').value = '';
       document.getElementById('form-price').value = '';
@@ -1255,14 +1261,12 @@
     function deleteCurrentItem(id) {
       if (!confirm('Deseja excluir este item?')) return;
       if (currentCatalogMode === 'standard') {
-        standardItems = standardItems.filter(x => String(x.id) !== String(id));
         delete standardCart[id];
-        saveStandardCache();
       } else {
-        eventItems = eventItems.filter(x => String(x.id) !== String(id));
         delete eventSelectedMap[id];
-        saveEventCache();
       }
+      setSharedItems(getActiveItems().filter(x => String(x.id) !== String(id)));
+      agendarEnvioEstoqueEditor();
       renderItemsList();
       renderAdminTable();
       renderSimulatorView();
@@ -1275,7 +1279,8 @@
       const tmp = list[idx];
       list[idx] = list[idx - 1];
       list[idx - 1] = tmp;
-      if (currentCatalogMode === 'standard') saveStandardCache(); else saveEventCache();
+      setSharedItems(list);
+      agendarEnvioEstoqueEditor();
       renderItemsList();
       renderAdminTable();
       renderSimulatorView();
@@ -1287,7 +1292,8 @@
       const tmp = list[idx];
       list[idx] = list[idx + 1];
       list[idx + 1] = tmp;
-      if (currentCatalogMode === 'standard') saveStandardCache(); else saveEventCache();
+      setSharedItems(list);
+      agendarEnvioEstoqueEditor();
       renderItemsList();
       renderAdminTable();
       renderSimulatorView();
@@ -1497,7 +1503,7 @@
                   <input type="number" step="0.10" min="0" value="${Number(it.price).toFixed(2)}" oninput="updateAdminItemField('${it.id}', 'price', this.value)" class="w-full bg-[#060b14] border border-[#1e293b] text-emerald-400 px-2 py-1.5 rounded-lg text-xs font-black outline-none focus:border-red-500 text-right font-mono">
                 </td>
                 <td class="p-2.5 text-center">
-                  <input type="number" min="0" value="${it.stock ?? 100}" oninput="updateAdminItemField('${it.id}', 'stock', this.value)" class="w-20 mx-auto bg-[#060b14] border border-[#1e293b] text-white px-2 py-1.5 rounded-lg text-xs font-bold text-center outline-none focus:border-red-500 font-mono">
+                  <div class="flex items-center justify-center gap-2"><span id="admin-stock-signal-${esc(it.id)}" title="Indicador de estoque" class="text-base leading-none" style="color:${getStockIndicatorColor(it.stock)}">●</span><input type="number" min="0" value="${it.stock ?? 100}" oninput="updateAdminItemField('${it.id}', 'stock', this.value)" class="w-20 bg-[#060b14] border border-[#1e293b] text-white px-2 py-1.5 rounded-lg text-xs font-bold text-center outline-none focus:border-red-500 font-mono"></div>
                 </td>
                 <td class="p-2.5 text-right whitespace-nowrap">
                   <button type="button" onclick="moveItemUp(${idx})" class="w-7 h-7 bg-slate-800 text-white rounded-lg text-xs font-bold">▲</button>
@@ -1511,6 +1517,21 @@
       `;
     }
 
+    function getStockIndicatorColor(stock) {
+      const amount = Number(stock);
+      if (!Number.isFinite(amount)) return '#eab308';
+      if (amount < 10) return '#ef4444';
+      if (amount > 20) return '#22c55e';
+      return '#eab308';
+    }
+
+    function getStockIndicatorEmoji(stock) {
+      const amount = Number(stock);
+      if (!Number.isFinite(amount) || amount < 10) return '🔴';
+      if (amount > 20) return '🟢';
+      return '🟡';
+    }
+
     function updateAdminItemField(id, field, value) {
       const list = getActiveItems();
       const it = list.find(x => String(x.id) === String(id));
@@ -1520,11 +1541,40 @@
       else if (field === 'stock') it.stock = parseInt(value, 10) || 0;
       else it[field] = value;
 
-      if (currentCatalogMode === 'standard') saveStandardCache();
-      else saveEventCache();
+      if (field === 'stock') {
+        const signal = document.getElementById('admin-stock-signal-' + id);
+        if (signal) signal.style.color = getStockIndicatorColor(it.stock);
+      }
+
+      setSharedItems(list);
+
+      agendarEnvioEstoqueEditor();
 
       renderSimulatorView();
       renderItemsList();
+    }
+
+    let _estoqueSyncTimer = null;
+    function agendarEnvioEstoqueEditor() {
+      clearTimeout(_estoqueSyncTimer);
+      _estoqueSyncTimer = setTimeout(function () {
+        try {
+          const st = getActiveStore();
+          const loja = (st && st.name) ? st.name : '';
+          if (!loja) return;
+          const lista = getActiveItems();
+          const d = new Date();
+          const pad = n => String(n).padStart(2, '0');
+          const dataHora = pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+          const linhas = [];
+          lista.forEach(it => { if (it && it.name) linhas.push([dataHora, loja, String(it.name), Number(it.stock || 0), 'Edição do Proprietário', getStockIndicatorEmoji(it.stock), String(it.category || ''), Number(it.price || 0)]); });
+          fetch('https://script.google.com/macros/s/AKfycbzGLYyzED8GKeO96H7ohGNK1SaZDThq9EJKvRy2_IE_66ATrM0Hp4H7tzM0sPjU-2U/exec', {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ aba: 'Estoque_' + loja, cabecalho: ['Data/Hora', 'Estabelecimento', 'Item', 'Estoque Restante', 'Motivo', 'Sinalizador', 'Categoria', 'Preço'], linhas: linhas })
+          }).catch(() => {});
+        } catch (e) {}
+      }, 900);
     }
 
     function promptChangeItemImage(id) {
@@ -1534,8 +1584,7 @@
       const newUrl = prompt('Nova URL da imagem para ' + it.name + ':', it.image);
       if (newUrl && newUrl.trim()) {
         it.image = newUrl.trim();
-        if (currentCatalogMode === 'standard') saveStandardCache();
-        else saveEventCache();
+        setSharedItems(list);
         renderAdminTable();
         renderSimulatorView();
         renderItemsList();
@@ -2036,16 +2085,18 @@
 
             if (isLoadedEvent) {
               eventStore = adaptedStore;
-              if (adaptedItems.length > 0) eventItems = adaptedItems;
+              if (adaptedItems.length > 0) { eventItems = adaptedItems; saveEventCache(); }
               eventSelectedMap = {};
               saveEventCache();
               switchCatalogMode('event');
+              agendarEnvioEstoqueEditor();
             } else {
               standardStore = adaptedStore;
-              if (adaptedItems.length > 0) standardItems = adaptedItems;
+              if (adaptedItems.length > 0) { standardItems = adaptedItems; saveStandardCache(); }
               standardCart = {};
               saveStandardCache();
               switchCatalogMode('standard');
+              agendarEnvioEstoqueEditor();
             }
 
             showToast('HTML carregado e adaptado aos parâmetros do Editor Supremo!');
@@ -2352,6 +2403,9 @@
         <button type="button" id="tab-ev-btn-config" onclick="switchOwnerTab('config')" class="px-3.5 py-2 rounded-xl text-xs font-bold text-stone-400 hover:text-white">
           ⚙️ Configurações
         </button>
+        <button type="button" id="tab-ev-btn-whatsapp" onclick="switchOwnerTab('whatsapp')" class="px-3.5 py-2 rounded-xl text-xs font-bold text-stone-400 hover:text-white">
+          📥 Colar WhatsApp
+        </button>
       </div>
 
       <div class="p-4 overflow-y-auto flex-1 space-y-4">
@@ -2440,6 +2494,18 @@
               </button>
             </div>
           </form>
+        </div>
+
+        <div id="tab-ev-pane-whatsapp" class="hidden space-y-4">
+          <div class="p-3 bg-[#120f0e] border border-amber-500/20 rounded-2xl space-y-1">
+            <h3 class="text-xs font-bold text-white flex items-center gap-1.5"><span class="text-amber-500">📥</span> Colar mensagem do WhatsApp do cliente</h3>
+            <p class="text-[11px] text-stone-400">Cole a mensagem recebida: o sistema lê os dados e preenche o formulário de Proposta (nome, WhatsApp, data, horário, convidados, local e pratos). Confira antes de enviar.</p>
+          </div>
+          <textarea id="wa-paste-text" rows="8" placeholder="Cole aqui a mensagem do WhatsApp recebida...&#10;&#10;Exemplo:&#10;Nome: João Silva&#10;WhatsApp: 11 98675-6309&#10;Data: 20/12/2026 às 19:00&#10;50 convidados&#10;Local: Salão de Festas - São Paulo&#10;2x Pacote Prime BBQ" class="w-full bg-[#120f0e] border border-stone-700 p-3 rounded-xl text-white text-xs outline-none focus:border-amber-500 font-mono"></textarea>
+          <div class="flex flex-wrap gap-2">
+            <button type="button" onclick="preencherPropostaFromWhatsApp()" class="px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-black rounded-xl shadow cursor-pointer">🔍 Ler mensagem e preencher proposta</button>
+            <button type="button" onclick="document.getElementById('wa-paste-text').value=''" class="px-4 py-2.5 bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-bold rounded-xl cursor-pointer">🗑 Limpar</button>
+          </div>
         </div>
       </div>
     </div>
@@ -2596,6 +2662,107 @@
       \`).join('');
     }
 
+    function waNormalizar(s) {
+      return String(s || '').toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');
+    }
+    function waExtrairCampos(msg) {
+      var res = { nome: '', telefone: '', cep: '', endereco: '', local: '', tipo: '', pagamento: '', data: '', hora: '', convidados: '', itens: [] };
+      if (!msg) return res;
+      var linhas = String(msg).split(/\\r?\\n/).map(function (l) { return l.trim(); }).filter(function (l) { return l; });
+      var texto = waNormalizar(msg);
+      if (/\\b(retirad\\w*|retiro\\w*|pickup)\\b/.test(texto)) res.tipo = 'pickup';
+      else if (/\\b(entrega\\w*|delivery)\\b/.test(texto)) res.tipo = 'delivery';
+      if (/\\bpix\\b/.test(texto)) res.pagamento = 'PIX';
+      else if (/cart[aã]o\\s+de\\s+credito|credito\\b/.test(texto)) res.pagamento = 'Cartão de Crédito';
+      else if (/cart[aã]o\\s+de\\s+debito|debito\\b/.test(texto)) res.pagamento = 'Cartão de Débito';
+      else if (/\\bdinheiro\\b|em especie\\b/.test(texto)) res.pagamento = 'Dinheiro';
+      var mCep = String(msg).match(/\\b\\d{5}-\\d{3}\\b/);
+      if (mCep) res.cep = mCep[0];
+      else { var mCep2 = String(msg).match(/\\b\\d{8}\\b/); if (mCep2) res.cep = mCep2[0].slice(0, 5) + '-' + mCep2[0].slice(5); }
+      var cands = String(msg).match(/\\(?\\d{2}\\)?[\\s-]?\\d{4,5}[-\\s]?\\d{4}/g) || [];
+      for (var i = 0; i < cands.length; i++) {
+        var dg = cands[i].replace(/\\D/g, '');
+        if (dg.length === 10 || dg.length === 11) { res.telefone = dg; break; }
+      }
+      if (!res.telefone) {
+        var mSeq = String(msg).match(/(?:^|\\D)(\\d{10,11})(?:\\D|$)/);
+        if (mSeq) res.telefone = mSeq[1];
+      }
+      var mData = String(msg).match(/\\b(\\d{2})\\/(\\d{2})\\/(\\d{4})\\b/);
+      if (mData) res.data = mData[3] + '-' + mData[2] + '-' + mData[1];
+      var mHora = String(msg).match(/\\b(\\d{1,2}):(\\d{2})\\b/);
+      if (mHora) res.hora = ('0' + mHora[1]).slice(-2) + ':' + mHora[2];
+      var mConv = texto.match(/(\\d+)\\s*(?:convidados|pessoas|participantes)/) || texto.match(/(?:convidados|pessoas)\\D{0,12}(\\d+)/);
+      if (mConv) res.convidados = parseInt(mConv[1], 10);
+      for (var n = 0; n < linhas.length && !res.nome; n++) {
+        var mNome = linhas[n].match(/(?:nome|cliente|respons[áa]vel|pedido de)\\s*[:\\-–]\\s*(.+)/i);
+        if (mNome && mNome[1] && mNome[1].trim().length > 1) res.nome = mNome[1].trim();
+      }
+      for (var e = 0; e < linhas.length; e++) {
+        var mEnd = linhas[e].match(/(?:endere[çc]o(?:\\s+de\\s+entrega)?|entrega\\s+em|entregar\\s+em)\\s*[:\\-–]\\s*(.+)/i);
+        if (mEnd && mEnd[1] && mEnd[1].trim().length > 2) { res.endereco = mEnd[1].trim(); break; }
+        if (/^(rua|avenida|av\\.?|travessa|alameda|rodovia)\\b/.test(waNormalizar(linhas[e])) && linhas[e].length > 5 && !res.endereco) { res.endereco = linhas[e].trim(); }
+      }
+      for (var lc = 0; lc < linhas.length; lc++) {
+        var mLoc = linhas[lc].match(/(?:local(?:\\s+do\\s+evento)?|cidade|ch[áa]cara|sal[ãa]o)\\s*[:\\-–]\\s*(.+)/i);
+        if (mLoc && mLoc[1] && mLoc[1].trim().length > 2) { res.local = mLoc[1].trim(); break; }
+      }
+      linhas.forEach(function (linha) {
+        var ln = waNormalizar(linha);
+        var m = ln.match(/^(\\d+)\\s*(?:x|un|und|pç|pc|por|porcao|porcoes|vezes|pct|pcts)?\\s*[-–:.]?\\s*(.{3,})$/);
+        if (!m) return;
+        var qtd = parseInt(m[1], 10);
+        if (!qtd || qtd < 1) return;
+        var alvoTxt = m[2];
+        if (/^[\\d\\s\\/\\.,R$-]+$/.test(alvoTxt)) return;
+        var melhor = null, melhorP = 0;
+        items.forEach(function (it) {
+          var ni = waNormalizar(it && it.name);
+          if (!ni) return;
+          var p = 0;
+          if (alvoTxt.indexOf(ni) !== -1) p = 100;
+          else if (ni.indexOf(alvoTxt) !== -1 && alvoTxt.length >= 5) p = 90;
+          else {
+            var palavras = ni.split(' ').filter(function (w) { return w.length >= 4; });
+            if (palavras.length) {
+              var acertos = palavras.filter(function (w) { return alvoTxt.indexOf(w) !== -1; }).length;
+              if (acertos >= Math.max(1, Math.ceil(palavras.length * 0.6))) p = acertos * 10;
+            }
+          }
+          if (p > melhorP) { melhorP = p; melhor = it; }
+        });
+        if (melhor && melhorP >= 10) res.itens.push({ id: melhor.id, qtd: qtd, name: melhor.name });
+      });
+      return res;
+    }
+
+    function preencherPropostaFromWhatsApp() {
+      var campo = document.getElementById('wa-paste-text');
+      var msg = campo ? campo.value : '';
+      if (!msg.trim()) { alert('Cole a mensagem do WhatsApp primeiro.'); return; }
+      var d = waExtrairCampos(msg);
+      if (!d.local && d.endereco) d.local = d.endereco;
+      chosenEventItems = {};
+      d.itens.forEach(function (x) { chosenEventItems[String(x.id)] = true; });
+      if (d.nome) document.getElementById('ev-quote-name').value = d.nome;
+      if (d.telefone) document.getElementById('ev-quote-phone').value = d.telefone;
+      if (d.data) document.getElementById('ev-quote-date').value = d.data;
+      if (d.hora) document.getElementById('ev-quote-time').value = d.hora;
+      if (d.convidados) document.getElementById('ev-quote-guests').value = d.convidados;
+      if (d.cep) document.getElementById('ev-quote-cep').value = d.cep;
+      if (d.local) document.getElementById('ev-quote-location').value = d.local;
+      closeClientAdminPanel();
+      openEventQuoteModal();
+      var faltas = [];
+      if (!d.nome) faltas.push('nome');
+      if (!d.telefone) faltas.push('WhatsApp');
+      if (!d.data) faltas.push('data');
+      if (!d.convidados) faltas.push('convidados');
+      if (!d.local) faltas.push('local');
+      if (!d.itens.length) faltas.push('pratos');
+      if (faltas.length) alert('Não identifiquei na mensagem: ' + faltas.join(', ') + '. Confira e complete a proposta antes de enviar.');
+    }
+
     function openEventQuoteModal() {
       if (orderBlockedGuard()) return;
       attachClientDateBlock();
@@ -2639,6 +2806,76 @@
     }
 
     function closeEventQuoteModal() { document.getElementById('event-quote-modal').classList.add('hidden'); }
+
+    const SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbzGLYyzED8GKeO96H7ohGNK1SaZDThq9EJKvRy2_IE_66ATrM0Hp4H7tzM0sPjU-2U/exec';
+    const SHEET_HEADERS9 = ['Cliente', 'WhatsApp', 'Data do Evento', 'Horário (hs)', 'Nº de Convidados', 'Local/Cidade', 'Prato/Serviço', 'Valor Unit.', 'Total dos Pratos'];
+    function sendOrderToSheet(aba, cabecalho, linhas) {
+      try {
+        fetch(SHEET_WEBHOOK_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ aba: aba, cabecalho: cabecalho, linhas: linhas })
+        }).catch(function () {});
+      } catch (e) {}
+    }
+
+    let _eventStockSyncTimer = null;
+    function scheduleEventStockSync(motivo) {
+      clearTimeout(_eventStockSyncTimer);
+      _eventStockSyncTimer = setTimeout(function () {
+        localStorage.setItem('BUFFET_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items, store }));
+        sendStockToSheet(motivo || 'Atualização em tempo real');
+      }, 500);
+    }
+
+    const SHEET_ESTOQUE_HEADERS = ['Data/Hora', 'Estabelecimento', 'Item', 'Estoque Restante', 'Motivo', 'Sinalizador', 'Categoria', 'Preço'];
+    function sendStockToSheet(motivo) {
+      try {
+        var d = new Date();
+        var pad = function (n) { return String(n).padStart(2, '0'); };
+        var dataHora = pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+        var linhas = [];
+        items.forEach(function (it) {
+          if (it && it.name) linhas.push([dataHora, store.name || '', String(it.name), Number(it.stock || 0), motivo || 'Edição do Proprietário', getStockIndicatorEmoji(it.stock), String(it.category || ''), Number(it.price || 0)]);
+        });
+        fetch(SHEET_WEBHOOK_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ aba: 'Estoque_' + (store.name || ''), cabecalho: SHEET_ESTOQUE_HEADERS, linhas: linhas })
+        }).catch(function () {});
+      } catch (e) {}
+    }
+    let _eventInitialSheetSyncComplete = false;
+    function pullStockFromSheet() {
+      try {
+        fetch(SHEET_WEBHOOK_URL + '?loja=' + encodeURIComponent(store.name || ''), { method: 'GET' })
+          .then(function (r) { return r.json(); })
+          .then(function (mapa) {
+            if (!mapa || typeof mapa !== 'object') return;
+            var mudou = false;
+            items.forEach(function (it) {
+              if (!it || !it.name) return;
+              var v = mapa[String(it.name).trim()];
+              if (v !== undefined && v !== null && v !== '') {
+                var n = parseInt(v, 10);
+                if (!isNaN(n) && it.stock !== n) { it.stock = n; mudou = true; }
+              }
+            });
+            if (mudou) {
+              localStorage.setItem('BUFFET_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items: items, store: store }));
+              renderCatalog();
+              if (typeof renderOwnerStockTable === 'function') renderOwnerStockTable();
+            }
+            if (!_eventInitialSheetSyncComplete) {
+              _eventInitialSheetSyncComplete = true;
+              sendStockToSheet('Sincronização inicial do cardápio evento');
+            }
+          })
+          .catch(function () {});
+      } catch (e) {}
+    }
+    setTimeout(pullStockFromSheet, 2000);
+    setInterval(pullStockFromSheet, 30000);
 
     function submitEventQuoteWhatsapp() {
       if (orderBlockedGuard()) return;
@@ -2695,6 +2932,27 @@
       });
       localStorage.setItem('BUFFET_QUOTES_' + (store.name || 'STORE'), JSON.stringify(quotesList));
 
+      const evLinhas = [];
+      const evData = d + '/' + m + '/' + y;
+      const evLocal = location ? location + (cep ? ' (CEP: ' + cep + ')' : '') : '';
+      if (chosenIds.length > 0) {
+        chosenIds.forEach(id => {
+          const item = items.find(x => String(x.id) === String(id));
+          if (item) {
+            evLinhas.push([
+              name, phone, evData,
+              time || '', guests || '', evLocal,
+              item.name,
+              'R$ ' + Number(item.price || 0).toFixed(2).replace('.', ','),
+              'R$ ' + totalVal.toFixed(2).replace('.', ',')
+            ]);
+          }
+        });
+      } else {
+        evLinhas.push([name, phone, evData, time || '', guests || '', evLocal, '', '', '']);
+      }
+      sendOrderToSheet(store.name, SHEET_HEADERS9, evLinhas);
+
       window.open('https://wa.me/' + waNumber(store.whatsapp) + '?text=' + encodeURIComponent(text), '_blank');
       closeEventQuoteModal();
     }
@@ -2747,7 +3005,7 @@
     }
 
     function switchOwnerTab(tab) {
-      ['menu-edit', 'stock', 'sales', 'config'].forEach(t => {
+      ['menu-edit', 'stock', 'sales', 'config', 'whatsapp'].forEach(t => {
         const pane = document.getElementById('tab-ev-pane-' + t);
         if (pane) pane.classList.toggle('hidden', t !== tab);
         const btn = document.getElementById('tab-ev-btn-' + t);
@@ -2775,13 +3033,13 @@
                 <td class="p-2.5">
                   <div class="flex items-center gap-2.5">
                     <img src="\${it.image}" class="w-10 h-10 rounded-lg object-cover bg-stone-900 shrink-0 border border-stone-700">
-                    <input id="owner-it-name-\${idx}" type="text" value="\${it.name}" class="w-full bg-[#181310] border border-stone-700 focus:border-amber-500 px-3 py-2 rounded-lg text-white font-bold text-xs outline-none">
+                    <input id="owner-it-name-\${idx}" type="text" value="\${it.name}" oninput="items[\${idx}].name=this.value; scheduleEventStockSync('Atualização em tempo real')" class="w-full bg-[#181310] border border-stone-700 focus:border-amber-500 px-3 py-2 rounded-lg text-white font-bold text-xs outline-none">
                   </div>
                 </td>
                 <td class="p-2.5">
                   <div class="relative">
                     <span class="absolute left-2.5 top-2 text-stone-400 text-xs font-bold">R$</span>
-                    <input id="owner-it-price-\${idx}" type="number" step="0.5" value="\${Number(it.price).toFixed(2)}" class="w-full bg-[#181310] border border-stone-700 focus:border-amber-500 pl-8 pr-2.5 py-2 rounded-lg text-amber-500 font-black text-xs text-right outline-none">
+                    <input id="owner-it-price-\${idx}" type="number" step="0.5" value="\${Number(it.price).toFixed(2)}" oninput="items[\${idx}].price=parseFloat(this.value)||0; scheduleEventStockSync('Atualização em tempo real')" class="w-full bg-[#181310] border border-stone-700 focus:border-amber-500 pl-8 pr-2.5 py-2 rounded-lg text-amber-500 font-black text-xs text-right outline-none">
                   </div>
                 </td>
               </tr>
@@ -2789,6 +3047,21 @@
           </tbody>
         </table>
       \`;
+    }
+
+    function getStockIndicatorColor(stock) {
+      var amount = Number(stock);
+      if (!Number.isFinite(amount)) return '#eab308';
+      if (amount < 10) return '#ef4444';
+      if (amount > 20) return '#22c55e';
+      return '#eab308';
+    }
+
+    function getStockIndicatorEmoji(stock) {
+      var amount = Number(stock);
+      if (!Number.isFinite(amount) || amount < 10) return '🔴';
+      if (amount > 20) return '🟢';
+      return '🟡';
     }
 
     function renderOwnerStockTable() {
@@ -2809,7 +3082,7 @@
                   <span>\${it.name}</span>
                 </td>
                 <td class="p-2.5 text-center">
-                  <input id="owner-it-stock-\${idx}" type="number" value="\${it.stock || 100}" class="w-24 mx-auto bg-[#181310] border border-stone-700 px-2 py-1.5 rounded-lg text-white font-bold text-xs text-center outline-none">
+                  <div class="flex items-center justify-center gap-2"><span id="owner-it-stock-signal-\${idx}" title="Indicador de estoque" class="text-base leading-none" style="color:\${getStockIndicatorColor(it.stock)}">●</span><input id="owner-it-stock-\${idx}" type="number" value="\${it.stock ?? 100}" oninput="items[\${idx}].stock=parseInt(this.value,10)||0; document.getElementById('owner-it-stock-signal-\${idx}').style.color=getStockIndicatorColor(this.value); scheduleEventStockSync('Atualização em tempo real')" class="w-24 bg-[#181310] border border-stone-700 px-2 py-1.5 rounded-lg text-white font-bold text-xs text-center outline-none"></div>
                 </td>
               </tr>
             \`).join('')}
@@ -2829,6 +3102,7 @@
       });
 
       localStorage.setItem('BUFFET_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items, store }));
+      sendStockToSheet('Edição do Proprietário');
       renderCatalog();
       renderOwnerMenuEditorTable();
       renderOwnerStockTable();
@@ -3221,6 +3495,9 @@
         <button type="button" id="tab-del-btn-config" onclick="switchOwnerTab('config')" class="px-3.5 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-white">
           ⚙️ Configurações
         </button>
+        <button type="button" id="tab-del-btn-whatsapp" onclick="switchOwnerTab('whatsapp')" class="px-3.5 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-white">
+          📥 Colar WhatsApp
+        </button>
       </div>
 
       <div class="p-4 overflow-y-auto flex-1 space-y-4">
@@ -3309,6 +3586,18 @@
               </button>
             </div>
           </form>
+        </div>
+
+        <div id="tab-del-pane-whatsapp" class="hidden space-y-4">
+          <div class="p-3 bg-[#090d16] border border-red-500/20 rounded-2xl space-y-1">
+            <h3 class="text-xs font-bold text-white flex items-center gap-1.5"><span class="text-red-500">📥</span> Colar mensagem do WhatsApp do cliente</h3>
+            <p class="text-[11px] text-slate-400">Cole a mensagem recebida: o sistema lê os dados e preenche o formulário de Concluir Pedido (tipo, itens, nome, WhatsApp, CEP, endereço e pagamento). Confira antes de enviar.</p>
+          </div>
+          <textarea id="wa-paste-text" rows="8" placeholder="Cole aqui a mensagem do WhatsApp recebida...&#10;&#10;Exemplo:&#10;Nome: Maria Souza&#10;WhatsApp: 11 98675-6309&#10;Entrega&#10;Rua das Flores, 123 - Centro&#10;CEP 01310-100&#10;2x BURGUER DA CASA&#10;1x BATATA FRITA ( M )&#10;Pagamento: PIX" class="w-full bg-[#060b14] border border-[#1e293b] p-3 rounded-xl text-white text-xs outline-none focus:border-red-500 font-mono"></textarea>
+          <div class="flex flex-wrap gap-2">
+            <button type="button" onclick="preencherPedidoFromWhatsApp()" class="px-4 py-2.5 bg-red-600 hover:bg-red-500 text-white text-xs font-black rounded-xl shadow cursor-pointer">🔍 Ler mensagem e preencher pedido</button>
+            <button type="button" onclick="document.getElementById('wa-paste-text').value=''" class="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl cursor-pointer">🗑 Limpar</button>
+          </div>
         </div>
       </div>
     </div>
@@ -3484,6 +3773,122 @@
       });
     }
 
+    function waNormalizar(s) {
+      return String(s || '').toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');
+    }
+    function waExtrairCampos(msg) {
+      var res = { nome: '', telefone: '', cep: '', endereco: '', local: '', tipo: '', pagamento: '', data: '', hora: '', convidados: '', itens: [] };
+      if (!msg) return res;
+      var linhas = String(msg).split(/\\r?\\n/).map(function (l) { return l.trim(); }).filter(function (l) { return l; });
+      var texto = waNormalizar(msg);
+      if (/\\b(retirad\\w*|retiro\\w*|pickup)\\b/.test(texto)) res.tipo = 'pickup';
+      else if (/\\b(entrega\\w*|delivery)\\b/.test(texto)) res.tipo = 'delivery';
+      if (/\\bpix\\b/.test(texto)) res.pagamento = 'PIX';
+      else if (/cart[aã]o\\s+de\\s+credito|credito\\b/.test(texto)) res.pagamento = 'Cartão de Crédito';
+      else if (/cart[aã]o\\s+de\\s+debito|debito\\b/.test(texto)) res.pagamento = 'Cartão de Débito';
+      else if (/\\bdinheiro\\b|em especie\\b/.test(texto)) res.pagamento = 'Dinheiro';
+      var mCep = String(msg).match(/\\b\\d{5}-\\d{3}\\b/);
+      if (mCep) res.cep = mCep[0];
+      else { var mCep2 = String(msg).match(/\\b\\d{8}\\b/); if (mCep2) res.cep = mCep2[0].slice(0, 5) + '-' + mCep2[0].slice(5); }
+      var cands = String(msg).match(/\\(?\\d{2}\\)?[\\s-]?\\d{4,5}[-\\s]?\\d{4}/g) || [];
+      for (var i = 0; i < cands.length; i++) {
+        var dg = cands[i].replace(/\\D/g, '');
+        if (dg.length === 10 || dg.length === 11) { res.telefone = dg; break; }
+      }
+      if (!res.telefone) {
+        var mSeq = String(msg).match(/(?:^|\\D)(\\d{10,11})(?:\\D|$)/);
+        if (mSeq) res.telefone = mSeq[1];
+      }
+      var mData = String(msg).match(/\\b(\\d{2})\\/(\\d{2})\\/(\\d{4})\\b/);
+      if (mData) res.data = mData[3] + '-' + mData[2] + '-' + mData[1];
+      var mHora = String(msg).match(/\\b(\\d{1,2}):(\\d{2})\\b/);
+      if (mHora) res.hora = ('0' + mHora[1]).slice(-2) + ':' + mHora[2];
+      var mConv = texto.match(/(\\d+)\\s*(?:convidados|pessoas|participantes)/) || texto.match(/(?:convidados|pessoas)\\D{0,12}(\\d+)/);
+      if (mConv) res.convidados = parseInt(mConv[1], 10);
+      for (var n = 0; n < linhas.length && !res.nome; n++) {
+        var mNome = linhas[n].match(/(?:nome|cliente|respons[áa]vel|pedido de)\\s*[:\\-–]\\s*(.+)/i);
+        if (mNome && mNome[1] && mNome[1].trim().length > 1) res.nome = mNome[1].trim();
+      }
+      for (var e = 0; e < linhas.length; e++) {
+        var mEnd = linhas[e].match(/(?:endere[çc]o(?:\\s+de\\s+entrega)?|entrega\\s+em|entregar\\s+em)\\s*[:\\-–]\\s*(.+)/i);
+        if (mEnd && mEnd[1] && mEnd[1].trim().length > 2) { res.endereco = mEnd[1].trim(); break; }
+        if (/^(rua|avenida|av\\.?|travessa|alameda|rodovia)\\b/.test(waNormalizar(linhas[e])) && linhas[e].length > 5 && !res.endereco) { res.endereco = linhas[e].trim(); }
+      }
+      for (var lc = 0; lc < linhas.length; lc++) {
+        var mLoc = linhas[lc].match(/(?:local(?:\\s+do\\s+evento)?|cidade|ch[áa]cara|sal[ãa]o)\\s*[:\\-–]\\s*(.+)/i);
+        if (mLoc && mLoc[1] && mLoc[1].trim().length > 2) { res.local = mLoc[1].trim(); break; }
+      }
+      linhas.forEach(function (linha) {
+        var ln = waNormalizar(linha);
+        var m = ln.match(/^(\\d+)\\s*(?:x|un|und|pç|pc|por|porcao|porcoes|vezes|pct|pcts)?\\s*[-–:.]?\\s*(.{3,})$/);
+        if (!m) return;
+        var qtd = parseInt(m[1], 10);
+        if (!qtd || qtd < 1) return;
+        var alvoTxt = m[2];
+        if (/^[\\d\\s\\/\\.,R$-]+$/.test(alvoTxt)) return;
+        var melhor = null, melhorP = 0;
+        items.forEach(function (it) {
+          var ni = waNormalizar(it && it.name);
+          if (!ni) return;
+          var p = 0;
+          if (alvoTxt.indexOf(ni) !== -1) p = 100;
+          else if (ni.indexOf(alvoTxt) !== -1 && alvoTxt.length >= 5) p = 90;
+          else {
+            var palavras = ni.split(' ').filter(function (w) { return w.length >= 4; });
+            if (palavras.length) {
+              var acertos = palavras.filter(function (w) { return alvoTxt.indexOf(w) !== -1; }).length;
+              if (acertos >= Math.max(1, Math.ceil(palavras.length * 0.6))) p = acertos * 10;
+            }
+          }
+          if (p > melhorP) { melhorP = p; melhor = it; }
+        });
+        if (melhor && melhorP >= 10) res.itens.push({ id: melhor.id, qtd: qtd, name: melhor.name });
+      });
+      return res;
+    }
+
+    function preencherPedidoFromWhatsApp() {
+      var campo = document.getElementById('wa-paste-text');
+      var msg = campo ? campo.value : '';
+      if (!msg.trim()) { alert('Cole a mensagem do WhatsApp primeiro.'); return; }
+      var d = waExtrairCampos(msg);
+      if (!d.endereco && d.local) d.endereco = d.local;
+      cart = {};
+      var totalQtd = 0;
+      d.itens.forEach(function (x) {
+        var it = items.find(function (z) { return String(z.id) === String(x.id); });
+        var max = it && it.stock !== undefined && it.stock !== null ? it.stock : x.qtd;
+        var q = Math.min(x.qtd, max);
+        if (q > 0) { cart[x.id] = (cart[x.id] || 0) + q; totalQtd += q; }
+      });
+      currentOrderType = d.tipo === 'pickup' ? 'pickup' : 'delivery';
+      if (d.nome) document.getElementById('order-customer-name').value = d.nome;
+      if (d.telefone) document.getElementById('order-customer-phone').value = d.telefone;
+      if (d.cep) document.getElementById('order-cep').value = d.cep;
+      if (d.endereco) document.getElementById('order-address').value = d.endereco;
+      if (d.pagamento) {
+        var sel = document.getElementById('order-payment');
+        if (sel) {
+          var tem = false;
+          for (var o = 0; o < sel.options.length; o++) if (sel.options[o].value === d.pagamento) tem = true;
+          if (tem) { sel.value = d.pagamento; handlePaymentChange(); }
+        }
+      }
+      renderCatalog();
+      updateTotal();
+      closeClientAdminPanel();
+      if (totalQtd > 0) {
+        openCheckoutModal();
+        var faltas = [];
+        if (!d.nome) faltas.push('nome');
+        if (!d.telefone) faltas.push('WhatsApp');
+        if (d.tipo !== 'pickup' && !d.endereco) faltas.push('endereço');
+        if (faltas.length) alert('Campos não identificados na mensagem: ' + faltas.join(', ') + '. Preencha manualmente antes de enviar.');
+      } else {
+        alert('Não consegui identificar itens na mensagem. Os dados lidos foram preenchidos; adicione os itens no cardápio para concluir o pedido.');
+      }
+    }
+
     function openCheckoutModal() {
       if (orderBlockedGuard()) return;
       const keys = Object.keys(cart);
@@ -3517,6 +3922,74 @@
     function closeCheckoutModal() {
       document.getElementById('checkout-modal').classList.add('hidden');
     }
+
+    const SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbzGLYyzED8GKeO96H7ohGNK1SaZDThq9EJKvRy2_IE_66ATrM0Hp4H7tzM0sPjU-2U/exec';
+    const SHEET_HEADERS13 = ['Data/Hora', 'Nº Pedido', 'Cliente', 'Telefone', 'Tipo', 'Endereço/Retirada', 'Item', 'Qtd', 'Valor Unit.', 'Subtotal Item', 'Taxa Entrega', 'Total', 'Pagamento'];
+    function sendOrderToSheet(aba, cabecalho, linhas) {
+      try {
+        fetch(SHEET_WEBHOOK_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ aba: aba, cabecalho: cabecalho, linhas: linhas })
+        }).catch(function () {});
+      } catch (e) {}
+    }
+
+        let _deliveryStockSyncTimer = null;
+    function scheduleDeliveryStockSync() {
+      clearTimeout(_deliveryStockSyncTimer);
+      _deliveryStockSyncTimer = setTimeout(function () {
+        localStorage.setItem('DELIVERY_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items: items, store: store }));
+        sendStockToSheet('Atualização de estoque em tempo real');
+      }, 500);
+    }const SHEET_ESTOQUE_HEADERS = ['Data/Hora', 'Estabelecimento', 'Item', 'Estoque Restante', 'Motivo', 'Sinalizador', 'Categoria', 'Preço'];
+    function sendStockToSheet(motivo) {
+      try {
+        var d = new Date();
+        var pad = function (n) { return String(n).padStart(2, '0'); };
+        var dataHora = pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+        var linhas = [];
+        items.forEach(function (it) {
+          if (it && it.name) linhas.push([dataHora, store.name || '', String(it.name), Number(it.stock || 0), motivo || 'Edição do Proprietário', getStockIndicatorEmoji(it.stock), String(it.category || ''), Number(it.price || 0)]);
+        });
+        fetch(SHEET_WEBHOOK_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ aba: 'Estoque_' + (store.name || ''), cabecalho: SHEET_ESTOQUE_HEADERS, linhas: linhas })
+        }).catch(function () {});
+      } catch (e) {}
+    }
+    let _deliveryInitialSheetSyncComplete = false;
+    function pullStockFromSheet() {
+      try {
+        fetch(SHEET_WEBHOOK_URL + '?loja=' + encodeURIComponent(store.name || ''), { method: 'GET' })
+          .then(function (r) { return r.json(); })
+          .then(function (mapa) {
+            if (!mapa || typeof mapa !== 'object') return;
+            var mudou = false;
+            items.forEach(function (it) {
+              if (!it || !it.name) return;
+              var v = mapa[String(it.name).trim()];
+              if (v !== undefined && v !== null && v !== '') {
+                var n = parseInt(v, 10);
+                if (!isNaN(n) && it.stock !== n) { it.stock = n; mudou = true; }
+              }
+            });
+            if (mudou) {
+              localStorage.setItem('DELIVERY_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items: items, store: store }));
+              renderCatalog();
+              if (typeof renderOwnerStockTable === 'function') renderOwnerStockTable();
+            }
+            if (!_deliveryInitialSheetSyncComplete) {
+              _deliveryInitialSheetSyncComplete = true;
+              sendStockToSheet('Sincronização inicial do cardápio normal');
+            }
+          })
+          .catch(function () {});
+      } catch (e) {}
+    }
+    setTimeout(pullStockFromSheet, 2000);
+    setInterval(pullStockFromSheet, 30000);
 
     function submitOrderWhatsapp() {
       if (orderBlockedGuard()) return;
@@ -3589,6 +4062,29 @@
       localStorage.setItem('DELIVERY_ORDERS_' + (store.name || 'STORE'), JSON.stringify(existingOrders));
       localStorage.setItem('DELIVERY_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items, store }));
 
+      const padN = n => String(n).padStart(2, '0');
+      const dataHora = padN(now.getDate()) + '/' + padN(now.getMonth() + 1) + '/' + now.getFullYear() + ' ' + padN(now.getHours()) + ':' + padN(now.getMinutes()) + ':' + padN(now.getSeconds());
+      const tipoTxt = currentOrderType === 'delivery' ? '🛵 Entrega (Delivery)' : '🏪 Retirada no Local';
+      const endRet = currentOrderType === 'delivery' ? (addr + (cep ? ' (CEP: ' + cep + ')' : '')) : (store.pickupAddress || 'Balcão da Loja');
+      const linhasPedido = [];
+      Object.keys(cart).forEach(id => {
+        const it = items.find(x => String(x.id) === String(id));
+        if (it) {
+          const q = cart[id];
+          linhasPedido.push([
+            dataHora, '', name, phone, tipoTxt, endRet,
+            it.name, String(q),
+            'R$ ' + Number(it.price).toFixed(2).replace('.', ','),
+            'R$ ' + (it.price * q).toFixed(2).replace('.', ','),
+            'R$ ' + Number(fee).toFixed(2).replace('.', ','),
+            'R$ ' + finalTotal.toFixed(2).replace('.', ','),
+            payment
+          ]);
+        }
+      });
+      if (linhasPedido.length) sendOrderToSheet(store.name, SHEET_HEADERS13, linhasPedido);
+      sendStockToSheet('Baixa por Pedido');
+
       const cleanPhone = waNumber(store.whatsapp);
       window.open('https://wa.me/' + cleanPhone + '?text=' + encodeURIComponent(msg), '_blank');
 
@@ -3646,7 +4142,7 @@
     }
 
     function switchOwnerTab(tab) {
-      ['menu-edit', 'stock', 'sales', 'config'].forEach(t => {
+      ['menu-edit', 'stock', 'sales', 'config', 'whatsapp'].forEach(t => {
         const pane = document.getElementById('tab-del-pane-' + t);
         if (pane) pane.classList.toggle('hidden', t !== tab);
         const btn = document.getElementById('tab-del-btn-' + t);
@@ -3690,6 +4186,21 @@
       \`;
     }
 
+    function getStockIndicatorColor(stock) {
+      var amount = Number(stock);
+      if (!Number.isFinite(amount)) return '#eab308';
+      if (amount < 10) return '#ef4444';
+      if (amount > 20) return '#22c55e';
+      return '#eab308';
+    }
+
+    function getStockIndicatorEmoji(stock) {
+      var amount = Number(stock);
+      if (!Number.isFinite(amount) || amount < 10) return '🔴';
+      if (amount > 20) return '🟢';
+      return '🟡';
+    }
+
     function renderOwnerStockTable() {
       const container = document.getElementById('owner-del-table-container');
       container.innerHTML = \`
@@ -3708,7 +4219,7 @@
                   <span>\${it.name}</span>
                 </td>
                 <td class="p-2.5 text-center">
-                  <input id="owner-it-stock-\${idx}" type="number" value="\${it.stock || 100}" class="w-24 mx-auto bg-[#060b14] border border-[#1e293b] px-2 py-1.5 rounded-lg text-white font-bold text-xs text-center outline-none">
+                  <div class="flex items-center justify-center gap-2"><span id="owner-it-stock-signal-\${idx}" title="Indicador de estoque" class="text-base leading-none" style="color:\${getStockIndicatorColor(it.stock)}">●</span><input id="owner-it-stock-\${idx}" type="number" value="\${it.stock ?? 100}" oninput="items[\${idx}].stock=parseInt(this.value,10)||0; document.getElementById('owner-it-stock-signal-\${idx}').style.color=getStockIndicatorColor(this.value); scheduleDeliveryStockSync()" class="w-24 bg-[#060b14] border border-[#1e293b] px-2 py-1.5 rounded-lg text-white font-bold text-xs text-center outline-none"></div>
                 </td>
               </tr>
             \`).join('')}
@@ -3728,6 +4239,7 @@
       });
 
       localStorage.setItem('DELIVERY_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items, store }));
+      sendStockToSheet('Edição do Proprietário');
       renderCatalog();
       renderOwnerMenuEditorTable();
       renderOwnerStockTable();
@@ -3867,16 +4379,26 @@
 
     function downloadExportedHtml() {
       const isEvent = currentCatalogMode === 'event';
+      let activeName = '';
       try {
         const st = getActiveStore();
         const hoursEl = document.getElementById('cfg-hours');
         const wpEl = document.getElementById('cfg-whatsapp');
+        const nameEl = document.getElementById('cfg-name');
         if (hoursEl) st.openingHours = hoursEl.value.trim();
         if (wpEl && wpEl.value.trim()) st.whatsapp = wpEl.value.trim();
+        if (nameEl && nameEl.value.trim()) st.name = nameEl.value.trim();
+        activeName = st.name || '';
         if (currentCatalogMode === 'standard') saveStandardCache(); else saveEventCache();
       } catch (err) {}
       const fileContent = buildExportedClientHtml(isEvent);
-      const fileName = isEvent ? 'cardapio-evento.html' : 'cardapio-digital.html';
+      const baseName = (activeName || '')
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+      const fileName = baseName
+        ? baseName + (isEvent ? '_evento.html' : '.html')
+        : (isEvent ? 'cardapio-evento.html' : 'cardapio-digital.html');
       const blob = new Blob([fileContent], { type: 'text/html;charset=utf-8' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
