@@ -369,6 +369,8 @@
               <div class="sm:col-span-2 bg-[#090d16] p-3.5 rounded-xl border border-[#1e293b]">
                 <label class="block text-xs font-bold text-slate-400 mb-1">📍 Endereço de Retirada / Saída Base</label>
                 <input id="cfg-pickup-address" type="text" class="w-full bg-[#060b14] border border-[#1e293b] text-white px-3 py-2 text-sm rounded-lg outline-none">
+                <label class="block text-[11px] font-bold text-slate-400 mt-3 mb-1">CEP Base (origem do cálculo da taxa de deslocamento)</label>
+                <input id="cfg-base-cep" type="text" maxlength="9" placeholder="Ex: 01310-100" class="w-full sm:max-w-xs bg-[#060b14] border border-[#1e293b] text-white px-3 py-2 text-sm rounded-lg outline-none font-mono">
               </div>
 
               <!-- DIAS E HORÁRIOS DE FUNCIONAMENTO -->
@@ -603,7 +605,7 @@
                   <span id="sim-std-cep-status" class="text-[10px] text-amber-400 font-semibold truncate"></span>
                 </div>
                 <input id="sim-std-cust-addr" type="text" placeholder="Endereço de Entrega (Rua, Nº, Bairro) *" class="w-full bg-[#090d16] border border-[#1e293b] p-2 rounded-lg text-white text-xs outline-none focus:border-red-500">
-                <p class="text-[10px] text-emerald-400 font-semibold mt-1">Taxa: R$ <span id="sim-delivery-fee-display">0,00</span></p>
+                <p class="text-[10px] text-emerald-400 font-semibold mt-1">Taxa: R$ <span id="sim-delivery-fee-display">0,00</span><span id="sim-delivery-km-info" class="text-slate-400 font-normal"></span></p>
               </div>
 
               <div id="sim-box-pickup" class="hidden bg-[#090d16] border border-sky-500/30 p-2.5 rounded-lg text-[11px]">
@@ -646,6 +648,7 @@
                   <span id="sim-cep-status" class="text-[10px] text-amber-400 font-semibold truncate"></span>
                 </div>
                 <input id="sim-quote-location" type="text" placeholder="Local / Cidade do Evento *" class="w-full bg-[#1c1613] border border-stone-700 p-2 rounded-lg text-white text-xs outline-none focus:border-amber-500">
+                <p class="text-[10px] text-emerald-400 font-semibold">Distância: <span id="sim-event-km-info">aguardando CEP</span> · Taxa base: R$ <span id="sim-event-base-calc">0,00</span> · Km excedente: R$ <span id="sim-event-extra-calc">0,00</span> · Total: R$ <span id="sim-event-fee-calc">0,00</span></p>
               </div>
             </div>
             <button type="button" onclick="submitSimQuoteWhatsapp()" class="w-full py-3 bg-emerald-600 text-white font-bold rounded-xl mt-3 shadow-lg cursor-pointer">Enviar Proposta no WhatsApp</button>
@@ -768,6 +771,7 @@
       deliveryExtraKmRate: 2,
       deliveryTime: "35 - 50 min",
       pickupAddress: "R. Antônio João dos Santos, 69 - Jardim Vila Carrao, São Paulo - SP",
+      baseCep: "08340-190",
       openingHours: "Ter e Sab das 18:00 as 23:30; Dom e Feriados das 18:00 as 22:30;",
       salesModuleUnlocked: true,
       stockModuleUnlocked: true,
@@ -796,6 +800,7 @@
       deliveryKmBase: 10,
       deliveryExtraKmRate: 3.50,
       pickupAddress: 'R. Antônio João dos Santos, 69 - Jardim Vila Carrao, São Paulo - SP',
+      baseCep: '08340-190',
       openingHours: 'Ter e Sab das 18:00 as 23:30; Dom e Feriados das 18:00 as 22:30;',
       salesModuleUnlocked: true,
       stockModuleUnlocked: true,
@@ -867,12 +872,16 @@
       return null;
     }
 
-    function setupCepAutocomplete(cepInputId, locationInputId, statusId) {
+    function setupCepAutocomplete(cepInputId, locationInputId, statusId, aoAtualizar) {
       const cepEl = document.getElementById(cepInputId);
       const locEl = document.getElementById(locationInputId);
       const statusEl = document.getElementById(statusId);
-      if (!cepEl || !locEl || cepEl.dataset.cepAttached) return;
+      if (!cepEl || !locEl) return;
+      if (typeof aoAtualizar === 'function') cepEl._aoAtualizar = aoAtualizar;
+      if (cepEl.dataset.cepAttached) return;
       cepEl.dataset.cepAttached = 'true';
+
+      const notificar = () => { const fn = cepEl._aoAtualizar; if (typeof fn === 'function') { try { fn(); } catch (e) {} } };
 
       const triggerSearch = async (val) => {
         const clean = val.replace(/\D/g, '');
@@ -892,6 +901,7 @@
       cepEl.addEventListener('input', (e) => {
         e.target.value = formatCepValue(e.target.value);
         triggerSearch(e.target.value);
+        notificar();
       });
 
       locEl.addEventListener('change', async (e) => {
@@ -905,6 +915,7 @@
             locEl.focus();
           }
         }
+        notificar();
       });
     }
 
@@ -972,6 +983,16 @@
       } catch (e) {}
     }
 
+    function garantirCepBase(store) {
+      if (!store) return;
+      const digits = String(store.baseCep || '').replace(/\D/g, '');
+      if (digits.length === 8) {
+        store.baseCep = digits.slice(0, 5) + '-' + digits.slice(5);
+        return;
+      }
+      if (/ant[oô]nio jo[aã]o dos santos/i.test(String(store.pickupAddress || ''))) store.baseCep = '08340-190';
+    }
+
     function loadIndependentCaches() {
       try {
         const sNorm = localStorage.getItem('CACHE_NORMAL_STORE');
@@ -984,6 +1005,8 @@
         const iEv = localStorage.getItem('CACHE_EVENTO_ITEMS');
         if (iEv) eventItems = JSON.parse(iEv);
       } catch (e) {}
+      garantirCepBase(standardStore);
+      garantirCepBase(eventStore);
     }
 
     function switchCatalogMode(mode) {
@@ -1026,6 +1049,7 @@
       document.getElementById('cfg-delivery-km-base').value = active.deliveryKmBase ?? 7;
       document.getElementById('cfg-delivery-extra-km-rate').value = active.deliveryExtraKmRate ?? 2;
       document.getElementById('cfg-pickup-address').value = active.pickupAddress || '';
+      document.getElementById('cfg-base-cep').value = active.baseCep || '';
       document.getElementById('cfg-hours').value = active.openingHours || '';
       updateOpeningHoursStatus();
       document.getElementById('cfg-dev-name').value = getCleanDevLink(active.developerName);
@@ -1247,7 +1271,7 @@
       };
 
       setSharedItems([newItem, ...getActiveItems()]);
-      agendarEnvioEstoqueEditor();
+      agendarEnvioEstoqueEditor([newItem]);
 
       document.getElementById('form-name').value = '';
       document.getElementById('form-price').value = '';
@@ -1266,7 +1290,7 @@
         delete eventSelectedMap[id];
       }
       setSharedItems(getActiveItems().filter(x => String(x.id) !== String(id)));
-      agendarEnvioEstoqueEditor();
+      // A remoção do item no editor não deve reenviar os estoques locais para a planilha.
       renderItemsList();
       renderAdminTable();
       renderSimulatorView();
@@ -1280,7 +1304,6 @@
       list[idx] = list[idx - 1];
       list[idx - 1] = tmp;
       setSharedItems(list);
-      agendarEnvioEstoqueEditor();
       renderItemsList();
       renderAdminTable();
       renderSimulatorView();
@@ -1293,7 +1316,6 @@
       list[idx] = list[idx + 1];
       list[idx + 1] = tmp;
       setSharedItems(list);
-      agendarEnvioEstoqueEditor();
       renderItemsList();
       renderAdminTable();
       renderSimulatorView();
@@ -1447,7 +1469,7 @@
         stockBtn.className = stUnlocked 
           ? 'px-3.5 py-2 text-xs font-black rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white shadow' 
           : 'px-3.5 py-2 text-xs font-black rounded-xl bg-amber-600 hover:bg-amber-500 text-white shadow';
-        stockBtn.textContent = sUnlocked ? '🔓 Desbloqueado' : '🔒 Bloqueado';
+        stockBtn.textContent = stUnlocked ? '🔓 Desbloqueado' : '🔒 Bloqueado';
       }
     }
 
@@ -1527,9 +1549,9 @@
 
     function getStockIndicatorEmoji(stock) {
       const amount = Number(stock);
-      if (!Number.isFinite(amount) || amount < 10) return '🔴';
-      if (amount > 20) return '🟢';
-      return '🟡';
+      if (!Number.isFinite(amount) || amount < 10) return 0;
+      if (amount > 20) return 2;
+      return 1;
     }
 
     function updateAdminItemField(id, field, value) {
@@ -1538,44 +1560,137 @@
       if (!it) return;
 
       if (field === 'price') it.price = parseFloat(value) || 0;
-      else if (field === 'stock') it.stock = parseInt(value, 10) || 0;
+      else if (field === 'stock') it.stock = value === '' ? 0 : Math.max(0, parseInt(value, 10) || 0);
       else it[field] = value;
 
       if (field === 'stock') {
+        _editorLastStockChangeAt = Date.now();
         const signal = document.getElementById('admin-stock-signal-' + id);
         if (signal) signal.style.color = getStockIndicatorColor(it.stock);
       }
 
       setSharedItems(list);
 
-      agendarEnvioEstoqueEditor();
+      if (field === 'stock') agendarEnvioEstoqueEditor([it]);
 
       renderSimulatorView();
       renderItemsList();
     }
 
     let _estoqueSyncTimer = null;
-    function agendarEnvioEstoqueEditor() {
+    let _editorLastStockChangeAt = 0;
+    let _editorStockDirtyKeys = new Set();
+    let _editorStockPushQueue = new Map();
+    let _editorStockPullInFlight = false;
+    function nomeAbaEstoqueEditor(loja, modo) {
+      return String(loja || '') + (modo === 'event' ? '__EVENTO' : '__NORMAL');
+    }
+    function chaveEstoqueEditor(it) {
+      return String(it && it.name || '').trim().toLocaleLowerCase() + '||' + String(it && it.category || '').trim().toLocaleLowerCase();
+    }
+    function agendarEnvioEstoqueEditor(itensParaEnviar) {
+      (Array.isArray(itensParaEnviar) ? itensParaEnviar : []).forEach(function (it) {
+        const chave = chaveEstoqueEditor(it);
+        if (chave !== '||') {
+          _editorStockDirtyKeys.add(chave);
+          _editorStockPushQueue.set(chave, Object.assign({}, it));
+        }
+      });
       clearTimeout(_estoqueSyncTimer);
       _estoqueSyncTimer = setTimeout(function () {
+        _estoqueSyncTimer = null;
         try {
           const st = getActiveStore();
           const loja = (st && st.name) ? st.name : '';
           if (!loja) return;
-          const lista = getActiveItems();
+          const lista = Array.from(_editorStockPushQueue.values());
+          if (!lista.length) return;
           const d = new Date();
           const pad = n => String(n).padStart(2, '0');
           const dataHora = pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
           const linhas = [];
-          lista.forEach(it => { if (it && it.name) linhas.push([dataHora, loja, String(it.name), Number(it.stock || 0), 'Edição do Proprietário', getStockIndicatorEmoji(it.stock), String(it.category || ''), Number(it.price || 0)]); });
-          fetch('https://script.google.com/macros/s/AKfycbzGLYyzED8GKeO96H7ohGNK1SaZDThq9EJKvRy2_IE_66ATrM0Hp4H7tzM0sPjU-2U/exec', {
+          lista.forEach(it => { if (it && it.name) linhas.push([dataHora, loja, String(it.name), Number(it.stock || 0), 'Edição do Proprietário', '', String(it.category || ''), Number(it.price || 0)]); });
+          fetch('https://script.google.com/macros/s/AKfycbyRtP0JthK_60x6Dzt7dMuLTcUWWjokTn93tRAh2vwLqe_lCqMbgUGJaIt1rYzPhwgC/exec', {
             method: 'POST',
+            mode: 'no-cors',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ aba: 'Estoque_' + loja, cabecalho: ['Data/Hora', 'Estabelecimento', 'Item', 'Estoque Restante', 'Motivo', 'Sinalizador', 'Categoria', 'Preço'], linhas: linhas })
-          }).catch(() => {});
+            body: JSON.stringify({ aba: 'Estoque_' + nomeAbaEstoqueEditor(loja, currentCatalogMode), cabecalho: ['Data/Hora', 'Estabelecimento', 'Item', 'Estoque Restante', 'Motivo', 'Sinalizador', 'Categoria', 'Preço'], linhas: linhas })
+          }).then(function () {
+            lista.forEach(function (it) {
+              const chave = chaveEstoqueEditor(it);
+              const atual = _editorStockPushQueue.get(chave);
+              if (atual && Number(atual.stock) === Number(it.stock)) {
+                _editorStockPushQueue.delete(chave);
+                _editorStockDirtyKeys.delete(chave);
+              }
+            });
+          }).catch(function (e) { console.error('Falha ao enviar estoque do editor:', e); });
         } catch (e) {}
       }, 900);
     }
+
+    function loadStockMapFromSheetEditor(loja) {
+      return new Promise(function (resolve, reject) {
+        const callbackName = '__stockEditor_' + Date.now() + '_' + Math.floor(Math.random() * 1000000);
+        const script = document.createElement('script');
+        const timer = setTimeout(function () { cleanup(); reject(new Error('Tempo esgotado ao ler o estoque da planilha.')); }, 15000);
+        function cleanup() { clearTimeout(timer); delete window[callbackName]; if (script.parentNode) script.parentNode.removeChild(script); }
+        window[callbackName] = function (data) { cleanup(); resolve(data || {}); };
+        script.onerror = function () { cleanup(); reject(new Error('Não foi possível acessar o estoque da planilha.')); };
+        script.src = 'https://script.google.com/macros/s/AKfycbyRtP0JthK_60x6Dzt7dMuLTcUWWjokTn93tRAh2vwLqe_lCqMbgUGJaIt1rYzPhwgC/exec?loja=' + encodeURIComponent(loja) + '&callback=' + callbackName + '&_=' + Date.now();
+        document.head.appendChild(script);
+      });
+    }
+    function pullStockFromSheetEditor() {
+      try {
+        if (_editorStockPullInFlight || _estoqueSyncTimer || _editorStockPushQueue.size || Date.now() - _editorLastStockChangeAt < 8000) return;
+        const modoAtual = currentCatalogMode;
+        const st = getActiveStore();
+        const loja = (st && st.name) ? st.name : '';
+        if (!loja) return;
+        _editorStockPullInFlight = true;
+        loadStockMapFromSheetEditor(nomeAbaEstoqueEditor(loja, modoAtual))
+          .then(function (mapa) {
+            if (!mapa || typeof mapa !== 'object') return;
+            if (currentCatalogMode !== modoAtual) return;
+            const lista = getActiveItems();
+            let mudou = false;
+            const campoEstoqueEmEdicao = document.activeElement && document.activeElement.matches('input[type="number"]')
+              && document.activeElement.getAttribute('oninput')
+              && document.activeElement.getAttribute('oninput').includes("'stock'");
+            if (campoEstoqueEmEdicao) return;
+            lista.forEach(function (it) {
+              if (!it || !it.name) return;
+              const nome = String(it.name).trim();
+              const chave = chaveEstoqueEditor(it);
+              if (_editorStockDirtyKeys.has(chave)) return;
+              let v = mapa[chave] !== undefined ? mapa[chave] : mapa[nome];
+              if (v === undefined) {
+                const nomeNormalizado = nome.toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+                const chaveNome = Object.keys(mapa).find(k => String(k).toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '') === nomeNormalizado);
+                if (chaveNome !== undefined) v = mapa[chaveNome];
+              }
+              if (v !== undefined && v !== null && v !== '') {
+                const n = parseInt(v, 10);
+                if (!isNaN(n) && it.stock !== n) { it.stock = n; mudou = true; }
+              }
+            });
+            if (mudou) {
+              setSharedItems(lista);
+              const adminVisivel = document.getElementById('tab-content-admin') && !document.getElementById('tab-content-admin').classList.contains('hidden');
+              if (!adminVisivel) renderAdminTable();
+              renderSimulatorView();
+              renderItemsList();
+            }
+          })
+          .catch(function (e) { console.error('Falha ao ler estoque da planilha no editor:', e); })
+          .finally(function () { _editorStockPullInFlight = false; });
+      } catch (e) {}
+    }
+    setTimeout(pullStockFromSheetEditor, 2500);
+    setInterval(function () { if (!document.hidden) pullStockFromSheetEditor(); }, 3000);
+    window.addEventListener('focus', pullStockFromSheetEditor);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) pullStockFromSheetEditor(); });
 
     function promptChangeItemImage(id) {
       const list = getActiveItems();
@@ -1746,6 +1861,185 @@
       document.getElementById('sim-event-extra-km').textContent = 'R$ ' + Number(eventStore.deliveryExtraKmRate ?? 3.5).toFixed(2).replace('.', ',') + '/km';
     }
 
+    let simTaxaEntregaAtual = 0;
+    let simDistanciaEntregaAtual = null;
+    let _taxaSeq = 0;
+    const _cepCoordCache = {};
+
+    function calcularTaxaDeslocamento(taxaBase, km, kmBase, kmExtra) {
+      const excedente = Math.max(0, (Number(km) || 0) - (Number(kmBase) || 0)) * (Number(kmExtra) || 0);
+      return Math.round(((Number(taxaBase) || 0) + excedente) * 100) / 100;
+    }
+
+    function haversineKm(a, b) {
+      const R = 6371;
+      const dLat = (b.lat - a.lat) * Math.PI / 180;
+      const dLng = (b.lng - a.lng) * Math.PI / 180;
+      const s = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) *
+        Math.sin(dLng / 2) * Math.sin(dLng / 2);
+      return 2 * R * Math.asin(Math.sqrt(s));
+    }
+
+    function cepDigitos(v) {
+      return String(v == null ? '' : v).replace(/\D/g, '');
+    }
+
+    function pontoNoBrasil(lat, lng) {
+      lat = Number(lat);
+      lng = Number(lng);
+      if (!isFinite(lat) || !isFinite(lng)) return null;
+      if (lat < -34 || lat > 6 || lng < -74 || lng > -32) return null;
+      return { lat: lat, lng: lng };
+    }
+
+    function obterCoordenadasCep(cep) {
+      const digits = cepDigitos(cep);
+      if (digits.length !== 8) return Promise.resolve(null);
+      if (_cepCoordCache[digits]) return Promise.resolve(_cepCoordCache[digits]);
+      const guardar = (pt) => { if (pt) _cepCoordCache[digits] = pt; return pt; };
+      const viaBrasil = () => fetch('https://brasilapi.com.br/api/cep/v2/' + digits)
+        .then(function (res) { if (!res.ok) throw new Error('CEP indisponivel'); return res.json(); })
+        .then(function (d) {
+          const c = d && d.location && d.location.coordinates;
+          return guardar(c ? pontoNoBrasil(c.latitude, c.longitude) : null);
+        })
+        .catch(function () { return null; });
+      return fetch('https://cep.awesomeapi.com.br/json/' + digits)
+        .then(function (res) { if (!res.ok) throw new Error('CEP indisponivel'); return res.json(); })
+        .then(function (d) {
+          const pt = d ? pontoNoBrasil(d.lat, d.lng) : null;
+          if (pt) return guardar(pt);
+          return viaBrasil();
+        })
+        .catch(function () { return viaBrasil(); });
+    }
+
+    function derivarBuscaEndereco(endereco) {
+      const txt = String(endereco || '').replace(/\s+/g, ' ').trim();
+      const mUf = txt.match(/\b([A-Z]{2})\s*$/);
+      if (!mUf) return null;
+      const semUf = txt.replace(/\s*-\s*[A-Z]{2}\s*$/, '').trim();
+      const pedacos = semUf.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+      if (pedacos.length < 2) return null;
+      const cidade = pedacos[pedacos.length - 1];
+      let rua = pedacos[0].replace(/^(rua|r\.|avenida|av\.|travessa|tv\.|alameda|rodovia|rod\.)\s+/i, '');
+      rua = rua.replace(/\b\d+\b/g, '').replace(/\s+/g, ' ').trim();
+      if (rua.length < 3 || cidade.length < 3) return null;
+      return { uf: mUf[1], cidade: cidade, rua: rua };
+    }
+
+    function obterCoordenadasEndereco(endereco) {
+      const q = derivarBuscaEndereco(endereco);
+      if (!q) return Promise.resolve(null);
+      const key = 'end:' + q.uf + '|' + q.cidade + '|' + q.rua;
+      if (_cepCoordCache[key]) return Promise.resolve(_cepCoordCache[key]);
+      const url = 'https://viacep.com.br/ws/' + encodeURIComponent(q.uf) + '/' + encodeURIComponent(q.cidade) + '/' + encodeURIComponent(q.rua) + '/json/';
+      return fetch(url)
+        .then(function (res) { return res.ok ? res.json() : null; })
+        .then(function (list) {
+          const first = Array.isArray(list) ? list.find(function (x) { return x && x.cep; }) : null;
+          if (!first) return null;
+          return obterCoordenadasCep(first.cep).then(function (pt) {
+            if (pt) _cepCoordCache[key] = pt;
+            return pt;
+          });
+        })
+        .catch(function () { return null; });
+    }
+
+    function cepOrigemDaLoja(store) {
+      const campo = document.getElementById('cfg-base-cep');
+      const doCampo = campo ? cepDigitos(campo.value) : '';
+      if (doCampo.length === 8) return doCampo;
+      const salvo = cepDigitos(store && store.baseCep);
+      return salvo.length === 8 ? salvo : '';
+    }
+
+    function coordenadasOrigem(store) {
+      const cep = cepOrigemDaLoja(store);
+      if (cep) return obterCoordenadasCep(cep);
+      return obterCoordenadasEndereco(store && store.pickupAddress);
+    }
+
+    function aplicarTaxaDeslocamentoSimulador(km) {
+      const base = Number(standardStore.deliveryFee || 0);
+      const kmBase = Number(standardStore.deliveryKmBase || 0);
+      const kmExtra = Number(standardStore.deliveryExtraKmRate || 0);
+      simDistanciaEntregaAtual = (typeof km === 'number' && isFinite(km)) ? km : null;
+      simTaxaEntregaAtual = calcularTaxaDeslocamento(base, simDistanciaEntregaAtual, kmBase, kmExtra);
+      const feeEl = document.getElementById('sim-delivery-fee-display');
+      const infoEl = document.getElementById('sim-delivery-km-info');
+      if (feeEl) feeEl.textContent = simTaxaEntregaAtual.toFixed(2).replace('.', ',');
+      if (infoEl) {
+        let txtInfo = simDistanciaEntregaAtual !== null ? ' (' + simDistanciaEntregaAtual.toFixed(1).replace('.', ',') + ' km)' : '';
+        if (simDistanciaEntregaAtual !== null) {
+          const kmExcedenteSim = Math.max(0, simDistanciaEntregaAtual - kmBase);
+          const valorExcedenteSim = Math.round(kmExcedenteSim * kmExtra * 100) / 100;
+          if (valorExcedenteSim > 0) txtInfo += ' · Km excedente: ' + kmExcedenteSim.toFixed(1).replace('.', ',') + ' km = R$ ' + valorExcedenteSim.toFixed(2).replace('.', ',');
+        }
+        infoEl.textContent = txtInfo;
+      }
+      updateSimCheckoutSummary();
+    }
+
+    function atualizarTaxaDeslocamentoSimulador() {
+      const seq = ++_taxaSeq;
+      if (simOrderType !== 'delivery') { aplicarTaxaDeslocamentoSimulador(null); return Promise.resolve(); }
+      const cepCliente = cepDigitos((document.getElementById('sim-std-cust-cep') || {}).value);
+      if (cepCliente.length !== 8) { aplicarTaxaDeslocamentoSimulador(null); return Promise.resolve(); }
+      return Promise.all([coordenadasOrigem(standardStore), obterCoordenadasCep(cepCliente)])
+        .then(function (pts) {
+          if (seq !== _taxaSeq || simOrderType !== 'delivery') return;
+          const a = pts[0], b = pts[1];
+          if (!a || !b) { aplicarTaxaDeslocamentoSimulador(null); return; }
+          aplicarTaxaDeslocamentoSimulador(Math.round(haversineKm(a, b) * 10) / 10);
+        });
+    }
+
+    let simTaxaEventoAtual = 0;
+    let simKmEventoAtual = null;
+    let _taxaEventoSeq = 0;
+
+    function aplicarTaxaEventoSimulador(km) {
+      const base = Number(eventStore.deliveryFee || 0);
+      const kmBase = Number(eventStore.deliveryKmBase || 0);
+      const kmExtra = Number(eventStore.deliveryExtraKmRate || 0);
+      simKmEventoAtual = (typeof km === 'number' && isFinite(km)) ? km : null;
+      simTaxaEventoAtual = calcularTaxaDeslocamento(base, simKmEventoAtual, kmBase, kmExtra);
+      const kmEl = document.getElementById('sim-event-km-info');
+      const feeEl = document.getElementById('sim-event-fee-calc');
+      const baseEl = document.getElementById('sim-event-base-calc');
+      const extraEl = document.getElementById('sim-event-extra-calc');
+      const kmExcedenteAtual = simKmEventoAtual !== null ? Math.max(0, simKmEventoAtual - kmBase) : 0;
+      const valorExcedenteAtual = Math.round(kmExcedenteAtual * kmExtra * 100) / 100;
+      if (baseEl) baseEl.textContent = base.toFixed(2).replace('.', ',');
+      if (extraEl) extraEl.textContent = valorExcedenteAtual.toFixed(2).replace('.', ',');
+      if (feeEl) feeEl.textContent = simTaxaEventoAtual.toFixed(2).replace('.', ',');
+      if (kmEl) {
+        let txtKm = simKmEventoAtual !== null ? simKmEventoAtual.toFixed(1).replace('.', ',') + ' km' : 'aguardando CEP';
+        if (simKmEventoAtual !== null) {
+          const kmExcedenteEv = Math.max(0, simKmEventoAtual - kmBase);
+          const valorExcedenteEv = Math.round(kmExcedenteEv * kmExtra * 100) / 100;
+          if (valorExcedenteEv > 0) txtKm += ' · Km excedente: R$ ' + valorExcedenteEv.toFixed(2).replace('.', ',');
+        }
+        kmEl.textContent = txtKm;
+      }
+    }
+
+    function atualizarTaxaDeslocamentoEvento() {
+      const seq = ++_taxaEventoSeq;
+      const cepCliente = cepDigitos((document.getElementById('sim-quote-cep') || {}).value);
+      if (cepCliente.length !== 8) { aplicarTaxaEventoSimulador(null); return Promise.resolve(); }
+      return Promise.all([coordenadasOrigem(eventStore), obterCoordenadasCep(cepCliente)])
+        .then(function (pts) {
+          if (seq !== _taxaEventoSeq) return;
+          const a = pts[0], b = pts[1];
+          if (!a || !b) { aplicarTaxaEventoSimulador(null); return; }
+          aplicarTaxaEventoSimulador(Math.round(haversineKm(a, b) * 10) / 10);
+        });
+    }
+
     function setSimOrderType(type) {
       simOrderType = type;
       const isDel = type === 'delivery';
@@ -1753,6 +2047,7 @@
       document.getElementById('sim-btn-pickup').className = !isDel ? "py-1.5 text-[11px] font-black rounded-lg bg-red-600 text-white shadow" : "py-1.5 text-[11px] font-bold rounded-lg text-slate-400";
       document.getElementById('sim-box-delivery').classList.toggle('hidden', !isDel);
       document.getElementById('sim-box-pickup').classList.toggle('hidden', isDel);
+      atualizarTaxaDeslocamentoSimulador();
       updateSimCheckoutSummary();
     }
 
@@ -1766,11 +2061,14 @@
         return `<div class="flex justify-between text-white"><span>${q}x ${esc(item ? item.name : 'Item')}</span><span class="font-bold text-emerald-400">R$ ${((item ? item.price : 0) * q).toFixed(2).replace('.', ',')}</span></div>`;
       }).join('');
 
+      simTaxaEntregaAtual = Number(standardStore.deliveryFee || 0);
+      simDistanciaEntregaAtual = null;
       document.getElementById('sim-delivery-fee-display').textContent = Number(standardStore.deliveryFee || 0).toFixed(2).replace('.', ',');
       document.getElementById('sim-pickup-address-text').textContent = standardStore.pickupAddress || 'Balcão da Loja';
       setSimOrderType('delivery');
 
-      setupCepAutocomplete('sim-std-cust-cep', 'sim-std-cust-addr', 'sim-std-cep-status');
+      setupCepAutocomplete('sim-std-cust-cep', 'sim-std-cust-addr', 'sim-std-cep-status', atualizarTaxaDeslocamentoSimulador);
+      atualizarTaxaDeslocamentoSimulador();
 
       document.getElementById('sim-standard-checkout-modal').classList.remove('hidden');
     }
@@ -1783,7 +2081,7 @@
         const item = standardItems.find(x => String(x.id) === String(id));
         if (item) sub += item.price * standardCart[id];
       });
-      const fee = simOrderType === 'delivery' ? Number(standardStore.deliveryFee || 0) : 0;
+      const fee = simOrderType === 'delivery' ? simTaxaEntregaAtual : 0;
       document.getElementById('sim-checkout-total-val').textContent = 'R$ ' + (sub + fee).toFixed(2).replace('.', ',');
     }
 
@@ -1800,6 +2098,7 @@
       text += `*Tipo:* ${simOrderType === 'delivery' ? '🛵 Entrega' : '🏪 Retirada no Local'}\n`;
       if (simOrderType === 'delivery') {
         text += `*Endereço:* ${addr}${cep ? ` (CEP: ${cep})` : ''}\n`;
+        if (simDistanciaEntregaAtual !== null) text += `*Deslocamento:* ${simDistanciaEntregaAtual.toFixed(1).replace('.', ',')} km\n`;
       } else {
         text += `*Retirada em:* ${standardStore.pickupAddress}\n`;
       }
@@ -1811,7 +2110,7 @@
           text += `• ${standardCart[id]}x ${item.name} - R$ ${(item.price * standardCart[id]).toFixed(2).replace('.', ',')}\n`;
         }
       });
-      const fee = simOrderType === 'delivery' ? Number(standardStore.deliveryFee || 0) : 0;
+      const fee = simOrderType === 'delivery' ? simTaxaEntregaAtual : 0;
       text += `\n*Subtotal:* R$ ${sub.toFixed(2).replace('.', ',')}\n`;
       text += `*Taxa:* ${fee > 0 ? 'R$ ' + fee.toFixed(2).replace('.', ',') : 'Grátis'}\n`;
       text += `*Total:* R$ ${(sub + fee).toFixed(2).replace('.', ',')}`;
@@ -1921,6 +2220,7 @@
       active.deliveryKmBase = parseFloat(document.getElementById('cfg-delivery-km-base').value) || 0;
       active.deliveryExtraKmRate = parseFloat(document.getElementById('cfg-delivery-extra-km-rate').value) || 0;
       active.pickupAddress = document.getElementById('cfg-pickup-address').value.trim() || active.pickupAddress;
+      active.baseCep = formatCepValue(document.getElementById('cfg-base-cep').value);
       active.openingHours = document.getElementById('cfg-hours').value.trim();
       updateOpeningHoursStatus();
       active.developerName = getCleanDevLink(document.getElementById('cfg-dev-name').value);
@@ -1990,6 +2290,7 @@
       s.deliveryExtraKmRate = (s.deliveryExtraKmRate !== undefined && s.deliveryExtraKmRate !== null && !isNaN(parseFloat(s.deliveryExtraKmRate))) ? parseFloat(s.deliveryExtraKmRate) : baseDefault.deliveryExtraKmRate;
       s.deliveryTime = String(s.deliveryTime || baseDefault.deliveryTime).trim();
       s.pickupAddress = String(s.pickupAddress || s.address || baseDefault.pickupAddress).trim();
+      s.baseCep = String(s.baseCep == null ? '' : s.baseCep).replace(/[^\d-]/g, '').trim();
       s.openingHours = String((rawStore || {}).openingHours || (rawStore || {}).horario || (rawStore || {}).hours || (rawStore || {}).businessHours || s.openingHours || baseDefault.openingHours).trim();
       s.salesModuleUnlocked = s.salesModuleUnlocked !== false;
       s.stockModuleUnlocked = s.stockModuleUnlocked !== false;
@@ -2077,26 +2378,25 @@
             const rawStore = data.store || {};
             const rawItems = Array.isArray(data.items) ? data.items : [];
 
-            const isLoadedEvent = data.tipoCardapio === 'evento' || data.tipoCardapio === 'buffet' ||
-              content.includes('Buffet de Churrasco') || content.includes('cardapio-evento') || content.includes('BRASEIROS DOS ASSADOS');
+            const modoDeclarado = String(data.tipoCardapio || data.mode || data.modo || '').toLowerCase();
+            const isLoadedEvent = modoDeclarado === 'evento' || modoDeclarado === 'event' || modoDeclarado === 'buffet' ||
+              (!modoDeclarado && (content.includes('Buffet de Churrasco') || content.includes('cardapio-evento') || content.includes('BRASEIROS DOS ASSADOS')));
 
             const adaptedStore = adaptStoreToSupremo(rawStore, isLoadedEvent);
             const adaptedItems = adaptItemsToSupremo(rawItems, isLoadedEvent);
 
             if (isLoadedEvent) {
               eventStore = adaptedStore;
-              if (adaptedItems.length > 0) { eventItems = adaptedItems; saveEventCache(); }
+              if (Array.isArray(data.items)) { eventItems = adaptedItems; saveEventCache(); }
               eventSelectedMap = {};
               saveEventCache();
               switchCatalogMode('event');
-              agendarEnvioEstoqueEditor();
             } else {
               standardStore = adaptedStore;
-              if (adaptedItems.length > 0) { standardItems = adaptedItems; saveStandardCache(); }
+              if (Array.isArray(data.items)) { standardItems = adaptedItems; saveStandardCache(); }
               standardCart = {};
               saveStandardCache();
               switchCatalogMode('standard');
-              agendarEnvioEstoqueEditor();
             }
 
             showToast('HTML carregado e adaptado aos parâmetros do Editor Supremo!');
@@ -2342,6 +2642,18 @@
           </div>
           <input id="ev-quote-location" type="text" placeholder="Endereço, chácara ou cidade..." class="w-full bg-[#120f0e] border border-stone-700 p-2.5 rounded-xl text-white text-xs outline-none focus:border-amber-500">
         </div>
+
+        <div class="bg-[#181310] p-2.5 rounded-xl border border-stone-800 space-y-1">
+          <div class="text-[11px] font-bold text-amber-500 flex items-center gap-1.5">
+            <i class="fa-solid fa-route"></i> Deslocamento até o Local do Evento
+          </div>
+          <div class="text-[10px] text-stone-400">
+            Taxa Base: <strong class="text-white">R$ ${Number(storeData.deliveryFee ?? 50).toFixed(2).replace('.', ',')}</strong>
+            · Km Base: <strong class="text-white">${Number(storeData.deliveryKmBase ?? 10).toFixed(1).replace('.', ',')} km</strong>
+            · Km Excedente: <strong class="text-white">R$ ${Number(storeData.deliveryExtraKmRate ?? 3.5).toFixed(2).replace('.', ',')}/km</strong>
+          </div>
+          <div id="ev-desloc-info" class="text-[11px] text-amber-400 font-semibold">Informe o CEP do local para calcular a distância.</div>
+        </div>
       </div>
 
       <div class="pt-2 border-t border-stone-800">
@@ -2431,7 +2743,7 @@
           <div id="owner-ev-stock-locked" class="hidden p-6 bg-[#120f0e] border border-amber-500/30 rounded-2xl text-center space-y-2">
             <span class="text-2xl">🔒</span>
             <h3 class="text-sm font-bold text-white">Módulo de Estoque Bloqueado</h3>
-            <p class="text-xs text-stone-400">Este módulo foi bloqueado pelo administrador.</p>
+            <p class="text-xs text-stone-400">O controle de estoque requer ativação de licença pelo administrador.</p>
           </div>
           <div id="owner-ev-stock-content" class="space-y-4">
             <div class="flex items-center justify-between">
@@ -2450,7 +2762,7 @@
           <div id="owner-ev-sales-locked" class="hidden p-6 bg-[#120f0e] border border-amber-500/30 rounded-2xl text-center space-y-2">
             <span class="text-2xl">🔒</span>
             <h3 class="text-sm font-bold text-white">Módulo de Vendas Bloqueado</h3>
-            <p class="text-xs text-stone-400">Este módulo foi bloqueado pelo administrador.</p>
+            <p class="text-xs text-stone-400">O controle de vendas e faturamento requer ativação de licença pelo administrador.</p>
           </div>
           <div id="owner-ev-sales-content" class="space-y-4">
             <div class="flex items-center justify-between">
@@ -2514,6 +2826,9 @@
   <script>
     let store = ${JSON.stringify(storeData)};
     let items = ${JSON.stringify(curItems)};
+    const STOCK_MODULE_UNLOCKED = ${storeData.stockModuleUnlocked !== false};
+    const SALES_MODULE_UNLOCKED = ${storeData.salesModuleUnlocked !== false};
+    const CEP_DELIVERY_CONFIG = { baseCep: ${JSON.stringify(storeData.baseCep || '')}, deliveryKmBase: ${Number(storeData.deliveryKmBase || 0)}, deliveryExtraKmRate: ${Number(storeData.deliveryExtraKmRate || 0)} };
     const OH_SCHEDULE = ${ohSchedulePayload};
     let selectedCategory = 'all';
     let chosenEventItems = {};
@@ -2527,6 +2842,11 @@
         if (parsed.store) store = Object.assign({}, store, parsed.store);
       } catch(e){}
     }
+    store.stockModuleUnlocked = STOCK_MODULE_UNLOCKED;
+    store.salesModuleUnlocked = SALES_MODULE_UNLOCKED;
+    store.baseCep = CEP_DELIVERY_CONFIG.baseCep;
+    store.deliveryKmBase = CEP_DELIVERY_CONFIG.deliveryKmBase;
+    store.deliveryExtraKmRate = CEP_DELIVERY_CONFIG.deliveryExtraKmRate;
 
     function checkExpiration() {
       if (store.expirationDate) {
@@ -2613,7 +2933,128 @@
         if (v.length > 5) v = v.replace(/^(\\d{5})(\\d)/, '$1-$2');
         e.target.value = v;
         searchCep(v);
+        atualizarTaxaDeslocamentoEvento();
       });
+    }
+
+    function soDigitosCep(v) {
+      return String(v == null ? '' : v).split('').filter(function (c) { return c >= '0' && c <= '9'; }).join('');
+    }
+
+    function calcularTaxaDeslocamento(taxaBase, km, kmBase, kmExtra) {
+      var excedente = Math.max(0, (Number(km) || 0) - (Number(kmBase) || 0)) * (Number(kmExtra) || 0);
+      return Math.round(((Number(taxaBase) || 0) + excedente) * 100) / 100;
+    }
+
+    function haversineKm(a, b) {
+      var R = 6371;
+      var dLat = (b.lat - a.lat) * Math.PI / 180;
+      var dLng = (b.lng - a.lng) * Math.PI / 180;
+      var s = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) *
+        Math.sin(dLng / 2) * Math.sin(dLng / 2);
+      return 2 * R * Math.asin(Math.sqrt(s));
+    }
+
+    const _cepCoordCacheEvento = {};
+    function obterCoordenadasCep(cep) {
+      var digits = soDigitosCep(cep);
+      if (digits.length !== 8) return Promise.resolve(null);
+      if (_cepCoordCacheEvento[digits]) return Promise.resolve(_cepCoordCacheEvento[digits]);
+      var guardar = function (pt) { if (pt) _cepCoordCacheEvento[digits] = pt; return pt; };
+      var pontoNoBrasil = function (lat, lng) {
+        lat = Number(lat);
+        lng = Number(lng);
+        if (!isFinite(lat) || !isFinite(lng)) return null;
+        if (lat < -34 || lat > 6 || lng < -74 || lng > -32) return null;
+        return { lat: lat, lng: lng };
+      };
+      var viaBrasil = function () {
+        return fetch('https://brasilapi.com.br/api/cep/v2/' + digits)
+          .then(function (res) { if (!res.ok) throw new Error('CEP indisponivel'); return res.json(); })
+          .then(function (d) {
+            var c = d && d.location && d.location.coordinates;
+            return guardar(c ? pontoNoBrasil(c.latitude, c.longitude) : null);
+          })
+          .catch(function () { return null; });
+      };
+      return fetch('https://cep.awesomeapi.com.br/json/' + digits)
+        .then(function (res) { if (!res.ok) throw new Error('CEP indisponivel'); return res.json(); })
+        .then(function (d) {
+          var pt = d ? pontoNoBrasil(d.lat, d.lng) : null;
+          if (pt) return guardar(pt);
+          return viaBrasil();
+        })
+        .catch(function () { return viaBrasil(); });
+    }
+
+    let deslocamentoTaxaAtual = 0;
+    let deslocamentoKmAtual = null;
+    let _deslocSeq = 0;
+
+    function aplicarTaxaDeslocamentoEvento(km) {
+      var base = Number(store.deliveryFee || 0);
+      var kmBase = Number(store.deliveryKmBase || 0);
+      var kmExtra = Number(store.deliveryExtraKmRate || 0);
+      deslocamentoKmAtual = (typeof km === 'number' && isFinite(km)) ? km : null;
+      deslocamentoTaxaAtual = calcularTaxaDeslocamento(base, deslocamentoKmAtual, kmBase, kmExtra);
+      var infoEl = document.getElementById('ev-desloc-info');
+      if (!infoEl) return;
+      if (deslocamentoKmAtual === null) {
+        infoEl.textContent = 'Informe o CEP do local para calcular a distância.';
+        infoEl.className = 'text-[11px] text-amber-400 font-semibold';
+        return;
+      }
+      var excedenteKm = Math.max(0, deslocamentoKmAtual - kmBase);
+      var valorExcedente = Math.round(excedenteKm * kmExtra * 100) / 100;
+      var txt = 'Distância: ' + deslocamentoKmAtual.toFixed(1).replace('.', ',') + ' km · Base: R$ ' + base.toFixed(2).replace('.', ',');
+      if (valorExcedente > 0) {
+        txt += ' · Excedente: ' + excedenteKm.toFixed(1).replace('.', ',') + ' km = R$ ' + valorExcedente.toFixed(2).replace('.', ',');
+      } else {
+        txt += ' · Excedente: 0,0 km = R$ 0,00';
+      }
+      infoEl.textContent = txt + ' · Total: R$ ' + deslocamentoTaxaAtual.toFixed(2).replace('.', ',');
+      infoEl.className = 'text-[11px] text-emerald-400 font-semibold';
+    }
+
+    function atualizarTaxaDeslocamentoEvento() {
+      var seq = ++_deslocSeq;
+      var cepEl = document.getElementById('ev-quote-cep');
+      var cepCliente = soDigitosCep(cepEl && cepEl.value ? cepEl.value : '');
+      var cepBase = soDigitosCep(store.baseCep);
+      if (cepBase.length !== 8) {
+        var ieCfg = document.getElementById('ev-desloc-info');
+        if (ieCfg) {
+          ieCfg.textContent = 'Configure o CEP base da loja para calcular o deslocamento.';
+          ieCfg.className = 'text-[11px] text-rose-400 font-semibold';
+        }
+        return;
+      }
+      if (cepCliente.length !== 8) { aplicarTaxaDeslocamentoEvento(null); return; }
+      aplicarTaxaDeslocamentoEvento(null);
+      Promise.all([obterCoordenadasCep(cepBase), obterCoordenadasCep(cepCliente)])
+        .then(function (pts) {
+          if (seq !== _deslocSeq) return;
+          var a = pts[0], b = pts[1];
+          if (!a || !b) {
+            var infoEl = document.getElementById('ev-desloc-info');
+            if (infoEl) {
+              infoEl.textContent = 'Não foi possível calcular a distância para este CEP. Verifique o CEP informado.';
+              infoEl.className = 'text-[11px] text-rose-400 font-semibold';
+            }
+            return;
+          }
+          aplicarTaxaDeslocamentoEvento(Math.round(haversineKm(a, b) * 10) / 10);
+        })
+        .catch(function (erro) {
+          if (seq !== _deslocSeq) return;
+          var infoEl = document.getElementById('ev-desloc-info');
+          if (infoEl) {
+            infoEl.textContent = 'Erro ao calcular a distância. Confira sua conexão e tente novamente.';
+            infoEl.className = 'text-[11px] text-rose-400 font-semibold';
+          }
+          console.error('Falha ao calcular deslocamento do evento:', erro);
+        });
     }
 
     function toggleChoice(id) {
@@ -2767,6 +3208,7 @@
       if (orderBlockedGuard()) return;
       attachClientDateBlock();
       setupClientCep();
+      atualizarTaxaDeslocamentoEvento();
       const dInput = document.getElementById('ev-quote-date');
       if (dInput) {
         const today = getClientToday();
@@ -2807,7 +3249,8 @@
 
     function closeEventQuoteModal() { document.getElementById('event-quote-modal').classList.add('hidden'); }
 
-    const SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbzGLYyzED8GKeO96H7ohGNK1SaZDThq9EJKvRy2_IE_66ATrM0Hp4H7tzM0sPjU-2U/exec';
+    const SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbyRtP0JthK_60x6Dzt7dMuLTcUWWjokTn93tRAh2vwLqe_lCqMbgUGJaIt1rYzPhwgC/exec';
+    const SHEET_STOCK_STORE_KEY = (store.name || '') + '__EVENTO';
     const SHEET_HEADERS9 = ['Cliente', 'WhatsApp', 'Data do Evento', 'Horário (hs)', 'Nº de Convidados', 'Local/Cidade', 'Prato/Serviço', 'Valor Unit.', 'Total dos Pratos'];
     function sendOrderToSheet(aba, cabecalho, linhas) {
       try {
@@ -2820,9 +3263,12 @@
     }
 
     let _eventStockSyncTimer = null;
+    let _eventLastStockChangeAt = 0;
     function scheduleEventStockSync(motivo) {
+      _eventLastStockChangeAt = Date.now();
       clearTimeout(_eventStockSyncTimer);
       _eventStockSyncTimer = setTimeout(function () {
+        _eventStockSyncTimer = null;
         localStorage.setItem('BUFFET_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items, store }));
         sendStockToSheet(motivo || 'Atualização em tempo real');
       }, 500);
@@ -2836,26 +3282,41 @@
         var dataHora = pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
         var linhas = [];
         items.forEach(function (it) {
-          if (it && it.name) linhas.push([dataHora, store.name || '', String(it.name), Number(it.stock || 0), motivo || 'Edição do Proprietário', getStockIndicatorEmoji(it.stock), String(it.category || ''), Number(it.price || 0)]);
+          if (it && it.name) linhas.push([dataHora, store.name || '', String(it.name), Number(it.stock || 0), motivo || 'Edição do Proprietário', '', String(it.category || ''), Number(it.price || 0)]);
         });
         fetch(SHEET_WEBHOOK_URL, {
           method: 'POST',
+          mode: 'no-cors',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({ aba: 'Estoque_' + (store.name || ''), cabecalho: SHEET_ESTOQUE_HEADERS, linhas: linhas })
-        }).catch(function () {});
+          body: JSON.stringify({ aba: 'Estoque_' + SHEET_STOCK_STORE_KEY, cabecalho: SHEET_ESTOQUE_HEADERS, linhas: linhas })
+        }).catch(function (e) { console.error('Falha ao enviar estoque evento para a planilha:', e); });
       } catch (e) {}
     }
-    let _eventInitialSheetSyncComplete = false;
+    function loadStockMapFromSheet(loja) {
+      return new Promise(function (resolve, reject) {
+        var callbackName = '__stockEvent_' + Date.now() + '_' + Math.floor(Math.random() * 1000000);
+        var script = document.createElement('script');
+        var timer = setTimeout(function () { cleanup(); reject(new Error('Tempo esgotado ao ler o estoque da planilha.')); }, 15000);
+        function cleanup() { clearTimeout(timer); delete window[callbackName]; if (script.parentNode) script.parentNode.removeChild(script); }
+        window[callbackName] = function (data) { cleanup(); resolve(data || {}); };
+        script.onerror = function () { cleanup(); reject(new Error('Não foi possível acessar o estoque da planilha.')); };
+        script.src = SHEET_WEBHOOK_URL + '?loja=' + encodeURIComponent(SHEET_STOCK_STORE_KEY) + '&callback=' + callbackName + '&_=' + Date.now();
+        document.head.appendChild(script);
+      });
+    }
     function pullStockFromSheet() {
       try {
-        fetch(SHEET_WEBHOOK_URL + '?loja=' + encodeURIComponent(store.name || ''), { method: 'GET' })
-          .then(function (r) { return r.json(); })
+        if (_eventStockSyncTimer || Date.now() - _eventLastStockChangeAt < 8000) return;
+        loadStockMapFromSheet(store.name || '')
           .then(function (mapa) {
             if (!mapa || typeof mapa !== 'object') return;
+            if (document.activeElement && /^owner-it-stock-/.test(document.activeElement.id || '')) return;
             var mudou = false;
             items.forEach(function (it) {
               if (!it || !it.name) return;
-              var v = mapa[String(it.name).trim()];
+              var nome = String(it.name).trim();
+              var chave = nome.toLocaleLowerCase() + '||' + String(it.category || '').trim().toLocaleLowerCase();
+              var v = mapa[chave] !== undefined ? mapa[chave] : mapa[nome];
               if (v !== undefined && v !== null && v !== '') {
                 var n = parseInt(v, 10);
                 if (!isNaN(n) && it.stock !== n) { it.stock = n; mudou = true; }
@@ -2864,18 +3325,17 @@
             if (mudou) {
               localStorage.setItem('BUFFET_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items: items, store: store }));
               renderCatalog();
+              if (typeof renderOwnerMenuEditorTable === 'function') renderOwnerMenuEditorTable();
               if (typeof renderOwnerStockTable === 'function') renderOwnerStockTable();
             }
-            if (!_eventInitialSheetSyncComplete) {
-              _eventInitialSheetSyncComplete = true;
-              sendStockToSheet('Sincronização inicial do cardápio evento');
-            }
           })
-          .catch(function () {});
+          .catch(function (e) { console.error('Falha ao ler estoque do evento na planilha:', e); });
       } catch (e) {}
     }
     setTimeout(pullStockFromSheet, 2000);
-    setInterval(pullStockFromSheet, 30000);
+    setInterval(function () { if (!document.hidden) pullStockFromSheet(); }, 3000);
+    window.addEventListener('focus', pullStockFromSheet);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) pullStockFromSheet(); });
 
     function submitEventQuoteWhatsapp() {
       if (orderBlockedGuard()) return;
@@ -2903,6 +3363,10 @@
       if (time) text += \`*Horário:* \${time}\\n\`;
       if (guests) text += \`*Nº de Convidados:* \${guests}\\n\`;
       if (location) text += \`*Local/Cidade:* \${location}\${cep ? \` (CEP: \${cep})\` : ''}\\n\`;
+      if (cep && deslocamentoKmAtual !== null) {
+        text += '*Deslocamento:* ' + deslocamentoKmAtual.toFixed(1).replace('.', ',') + ' km' + '\\n';
+        text += '*Taxa de Deslocamento:* R$ ' + deslocamentoTaxaAtual.toFixed(2).replace('.', ',') + '\\n';
+      }
 
       const chosenIds = Object.keys(chosenEventItems);
       let totalVal = 0;
@@ -2988,11 +3452,13 @@
       renderOwnerQuotesList();
       populateOwnerStoreConfig();
 
-      const isStockUnlocked = store.stockModuleUnlocked !== false;
+      const isStockUnlocked = STOCK_MODULE_UNLOCKED;
+      document.getElementById('tab-ev-btn-stock').innerHTML = '📦 Controle de Estoque' + (isStockUnlocked ? '' : ' 🔒');
       document.getElementById('owner-ev-stock-locked').classList.toggle('hidden', isStockUnlocked);
       document.getElementById('owner-ev-stock-content').classList.toggle('hidden', !isStockUnlocked);
 
-      const isSalesUnlocked = store.salesModuleUnlocked !== false;
+      const isSalesUnlocked = SALES_MODULE_UNLOCKED;
+      document.getElementById('tab-ev-btn-sales').innerHTML = '📊 Controle de Vendas' + (isSalesUnlocked ? '' : ' 🔒');
       document.getElementById('owner-ev-sales-locked').classList.toggle('hidden', isSalesUnlocked);
       document.getElementById('owner-ev-sales-content').classList.toggle('hidden', !isSalesUnlocked);
 
@@ -3059,9 +3525,9 @@
 
     function getStockIndicatorEmoji(stock) {
       var amount = Number(stock);
-      if (!Number.isFinite(amount) || amount < 10) return '🔴';
-      if (amount > 20) return '🟢';
-      return '🟡';
+      if (!Number.isFinite(amount) || amount < 10) return 0;
+      if (amount > 20) return 2;
+      return 1;
     }
 
     function renderOwnerStockTable() {
@@ -3405,7 +3871,7 @@
           </div>
           <input id="order-address" type="text" placeholder="Endereço de Entrega (Rua, Nº, Bairro) *" class="w-full bg-[#090d16] border border-[#1e293b] p-2.5 rounded-xl text-white text-xs outline-none focus:border-red-500">
           <div class="text-[10px] text-emerald-400 font-semibold px-1">
-            🛵 Taxa de Entrega: R$ <span id="checkout-fee-text">0,00</span>
+            🛵 Taxa de Entrega: R$ <span id="checkout-fee-text">0,00</span><span id="checkout-km-info" class="text-slate-400 font-normal"></span>
           </div>
         </div>
 
@@ -3523,7 +3989,7 @@
           <div id="owner-del-stock-locked" class="hidden p-6 bg-[#090d16] border border-amber-500/30 rounded-2xl text-center space-y-2">
             <span class="text-2xl">🔒</span>
             <h3 class="text-sm font-bold text-white">Módulo de Estoque Bloqueado</h3>
-            <p class="text-xs text-slate-400">Este módulo foi bloqueado pelo administrador.</p>
+            <p class="text-xs text-slate-400">O controle de estoque requer ativação de licença pelo administrador.</p>
           </div>
           <div id="owner-del-stock-content" class="space-y-4">
             <div class="flex items-center justify-between">
@@ -3542,7 +4008,7 @@
           <div id="owner-del-sales-locked" class="hidden p-6 bg-[#090d16] border border-amber-500/30 rounded-2xl text-center space-y-2">
             <span class="text-2xl">🔒</span>
             <h3 class="text-sm font-bold text-white">Módulo de Vendas Bloqueado</h3>
-            <p class="text-xs text-slate-400">Este módulo foi bloqueado pelo administrador.</p>
+            <p class="text-xs text-slate-400">O controle de vendas e faturamento requer ativação de licença pelo administrador.</p>
           </div>
           <div id="owner-del-sales-content" class="space-y-4">
             <div class="flex items-center justify-between">
@@ -3606,6 +4072,9 @@
   <script>
     let store = ${JSON.stringify(storeData)};
     let items = ${JSON.stringify(curItems)};
+    const STOCK_MODULE_UNLOCKED = ${storeData.stockModuleUnlocked !== false};
+    const SALES_MODULE_UNLOCKED = ${storeData.salesModuleUnlocked !== false};
+    const CEP_DELIVERY_CONFIG = { baseCep: ${JSON.stringify(storeData.baseCep || '')}, deliveryKmBase: ${Number(storeData.deliveryKmBase || 0)}, deliveryExtraKmRate: ${Number(storeData.deliveryExtraKmRate || 0)} };
     const OH_SCHEDULE = ${ohSchedulePayload};
     let cart = {};
     let selectedCategory = 'Todos';
@@ -3620,6 +4089,11 @@
         if (parsed.store) store = Object.assign({}, store, parsed.store);
       } catch(e){}
     }
+    store.stockModuleUnlocked = STOCK_MODULE_UNLOCKED;
+    store.salesModuleUnlocked = SALES_MODULE_UNLOCKED;
+    store.baseCep = CEP_DELIVERY_CONFIG.baseCep;
+    store.deliveryKmBase = CEP_DELIVERY_CONFIG.deliveryKmBase;
+    store.deliveryExtraKmRate = CEP_DELIVERY_CONFIG.deliveryExtraKmRate;
 
     function checkExpiration() {
       if (store.expirationDate) {
@@ -3716,6 +4190,7 @@
 
       document.getElementById('box-delivery-fields').classList.toggle('hidden', !isDel);
       document.getElementById('box-pickup-fields').classList.toggle('hidden', isDel);
+      atualizarTaxaDeslocamento();
       updateCheckoutTotalPrice();
     }
 
@@ -3724,14 +4199,122 @@
       document.getElementById('box-change-field').classList.toggle('hidden', m !== 'Dinheiro');
     }
 
+    let taxaEntregaAtual = Number(store.deliveryFee || 0);
+    let distanciaEntregaAtual = null;
+    let _taxaSeq = 0;
+    const _cepCoordCache = {};
+
     function updateCheckoutTotalPrice() {
       let sub = 0;
       Object.keys(cart).forEach(id => {
         const it = items.find(x => String(x.id) === String(id));
         if (it) sub += it.price * cart[id];
       });
-      const fee = currentOrderType === 'delivery' ? Number(store.deliveryFee || 0) : 0;
+      const fee = currentOrderType === 'delivery' ? taxaEntregaAtual : 0;
       document.getElementById('checkout-total-price').textContent = 'R$ ' + (sub + fee).toFixed(2).replace('.', ',');
+    }
+
+    function calcularTaxaDeslocamento(taxaBase, km, kmBase, kmExtra) {
+      var excedente = Math.max(0, (Number(km) || 0) - (Number(kmBase) || 0)) * (Number(kmExtra) || 0);
+      return Math.round(((Number(taxaBase) || 0) + excedente) * 100) / 100;
+    }
+
+    function haversineKm(a, b) {
+      var R = 6371;
+      var dLat = (b.lat - a.lat) * Math.PI / 180;
+      var dLng = (b.lng - a.lng) * Math.PI / 180;
+      var s = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) *
+        Math.sin(dLng / 2) * Math.sin(dLng / 2);
+      return 2 * R * Math.asin(Math.sqrt(s));
+    }
+
+    function obterCoordenadasCep(cep) {
+      var digits = String(cep == null ? '' : cep).replace(/\\D/g, '');
+      if (digits.length !== 8) return Promise.resolve(null);
+      if (_cepCoordCache[digits]) return Promise.resolve(_cepCoordCache[digits]);
+      var guardar = function (pt) { if (pt) _cepCoordCache[digits] = pt; return pt; };
+      var pontoNoBrasil = function (lat, lng) {
+        lat = Number(lat);
+        lng = Number(lng);
+        if (!isFinite(lat) || !isFinite(lng)) return null;
+        if (lat < -34 || lat > 6 || lng < -74 || lng > -32) return null;
+        return { lat: lat, lng: lng };
+      };
+      var viaBrasil = function () {
+        return fetch('https://brasilapi.com.br/api/cep/v2/' + digits)
+          .then(function (res) { if (!res.ok) throw new Error('CEP indisponivel'); return res.json(); })
+          .then(function (d) {
+            var c = d && d.location && d.location.coordinates;
+            return guardar(c ? pontoNoBrasil(c.latitude, c.longitude) : null);
+          })
+          .catch(function () { return null; });
+      };
+      return fetch('https://cep.awesomeapi.com.br/json/' + digits)
+        .then(function (res) { if (!res.ok) throw new Error('CEP indisponivel'); return res.json(); })
+        .then(function (d) {
+          var pt = d ? pontoNoBrasil(d.lat, d.lng) : null;
+          if (pt) return guardar(pt);
+          return viaBrasil();
+        })
+        .catch(function () { return viaBrasil(); });
+    }
+
+    function aplicarTaxaEntrega(km) {
+      var base = Number(store.deliveryFee || 0);
+      var kmBase = Number(store.deliveryKmBase || 0);
+      var kmExtra = Number(store.deliveryExtraKmRate || 0);
+      distanciaEntregaAtual = (typeof km === 'number' && isFinite(km)) ? km : null;
+      taxaEntregaAtual = calcularTaxaDeslocamento(base, distanciaEntregaAtual, kmBase, kmExtra);
+      var feeEl = document.getElementById('checkout-fee-text');
+      var infoEl = document.getElementById('checkout-km-info');
+      if (feeEl) feeEl.textContent = taxaEntregaAtual.toFixed(2).replace('.', ',');
+      if (infoEl) {
+        var infoTxt = distanciaEntregaAtual !== null ? 'Distância: ' + distanciaEntregaAtual.toFixed(1).replace('.', ',') + ' km · Base: R$ ' + base.toFixed(2).replace('.', ',') : 'Base: R$ ' + base.toFixed(2).replace('.', ',');
+        if (distanciaEntregaAtual !== null) {
+          var kmExcedente = Math.max(0, distanciaEntregaAtual - kmBase);
+          var valorExcedente = Math.round(kmExcedente * kmExtra * 100) / 100;
+          infoTxt += ' · Excedente: ' + kmExcedente.toFixed(1).replace('.', ',') + ' km = R$ ' + valorExcedente.toFixed(2).replace('.', ',');
+        }
+        infoEl.textContent = infoTxt + ' · Total: R$ ' + taxaEntregaAtual.toFixed(2).replace('.', ',');
+      }
+      updateCheckoutTotalPrice();
+    }
+
+    function atualizarTaxaDeslocamento() {
+      var seq = ++_taxaSeq;
+      if (currentOrderType !== 'delivery') { aplicarTaxaEntrega(null); return; }
+      var cepEl = document.getElementById('order-cep');
+      var cepCliente = String(cepEl && cepEl.value ? cepEl.value : '').replace(/\\D/g, '');
+      var cepBase = String(store.baseCep || '').replace(/\\D/g, '');
+      if (cepCliente.length !== 8 || cepBase.length !== 8) {
+        aplicarTaxaEntrega(null);
+        var msgCep = document.getElementById('checkout-km-info');
+        if (msgCep) msgCep.textContent = cepBase.length !== 8 ? 'Configure o CEP base no editor para calcular o excedente.' : 'Informe um CEP de destino válido para calcular o excedente.';
+        return;
+      }
+      aplicarTaxaEntrega(null);
+      var infoCalculando = document.getElementById('checkout-km-info');
+      if (infoCalculando) infoCalculando.textContent = 'Calculando distância e km excedente...';
+      Promise.all([obterCoordenadasCep(cepBase), obterCoordenadasCep(cepCliente)])
+        .then(function (pts) {
+          if (seq !== _taxaSeq || currentOrderType !== 'delivery') return;
+          var a = pts[0], b = pts[1];
+          if (!a || !b) {
+            aplicarTaxaEntrega(null);
+            var infoErro = document.getElementById('checkout-km-info');
+            if (infoErro) infoErro.textContent = 'Não foi possível localizar os CEPs. Confira o CEP base e o destino.';
+            return;
+          }
+          aplicarTaxaEntrega(Math.round(haversineKm(a, b) * 10) / 10);
+        })
+        .catch(function (erro) {
+          if (seq !== _taxaSeq) return;
+          aplicarTaxaEntrega(null);
+          var infoErro = document.getElementById('checkout-km-info');
+          if (infoErro) infoErro.textContent = 'Erro ao calcular a distância. Confira sua conexão e tente novamente.';
+          console.error('Falha ao calcular distância e km excedente:', erro);
+        });
     }
 
     function setupClientCepDelivery() {
@@ -3770,6 +4353,7 @@
         if (v.length > 5) v = v.replace(/^(\\d{5})(\\d)/, '$1-$2');
         e.target.value = v;
         searchCep(v);
+        atualizarTaxaDeslocamento();
       });
     }
 
@@ -3914,6 +4498,7 @@
 
       setOrderType(currentOrderType);
       setupClientCepDelivery();
+      atualizarTaxaDeslocamento();
       updateCheckoutTotalPrice();
 
       document.getElementById('checkout-modal').classList.remove('hidden');
@@ -3923,8 +4508,9 @@
       document.getElementById('checkout-modal').classList.add('hidden');
     }
 
-    const SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbzGLYyzED8GKeO96H7ohGNK1SaZDThq9EJKvRy2_IE_66ATrM0Hp4H7tzM0sPjU-2U/exec';
+    const SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbyRtP0JthK_60x6Dzt7dMuLTcUWWjokTn93tRAh2vwLqe_lCqMbgUGJaIt1rYzPhwgC/exec';
     const SHEET_HEADERS13 = ['Data/Hora', 'Nº Pedido', 'Cliente', 'Telefone', 'Tipo', 'Endereço/Retirada', 'Item', 'Qtd', 'Valor Unit.', 'Subtotal Item', 'Taxa Entrega', 'Total', 'Pagamento'];
+    const SHEET_STOCK_STORE_KEY = (store.name || '') + '__NORMAL';
     function sendOrderToSheet(aba, cabecalho, linhas) {
       try {
         fetch(SHEET_WEBHOOK_URL, {
@@ -3936,13 +4522,17 @@
     }
 
         let _deliveryStockSyncTimer = null;
+    let _deliveryLastStockChangeAt = 0;
     function scheduleDeliveryStockSync() {
+      _deliveryLastStockChangeAt = Date.now();
       clearTimeout(_deliveryStockSyncTimer);
       _deliveryStockSyncTimer = setTimeout(function () {
+        _deliveryStockSyncTimer = null;
         localStorage.setItem('DELIVERY_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items: items, store: store }));
         sendStockToSheet('Atualização de estoque em tempo real');
       }, 500);
-    }const SHEET_ESTOQUE_HEADERS = ['Data/Hora', 'Estabelecimento', 'Item', 'Estoque Restante', 'Motivo', 'Sinalizador', 'Categoria', 'Preço'];
+    }
+    const SHEET_ESTOQUE_HEADERS = ['Data/Hora', 'Estabelecimento', 'Item', 'Estoque Restante', 'Motivo', 'Sinalizador', 'Categoria', 'Preço'];
     function sendStockToSheet(motivo) {
       try {
         var d = new Date();
@@ -3950,26 +4540,41 @@
         var dataHora = pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
         var linhas = [];
         items.forEach(function (it) {
-          if (it && it.name) linhas.push([dataHora, store.name || '', String(it.name), Number(it.stock || 0), motivo || 'Edição do Proprietário', getStockIndicatorEmoji(it.stock), String(it.category || ''), Number(it.price || 0)]);
+          if (it && it.name) linhas.push([dataHora, store.name || '', String(it.name), Number(it.stock || 0), motivo || 'Edição do Proprietário', '', String(it.category || ''), Number(it.price || 0)]);
         });
         fetch(SHEET_WEBHOOK_URL, {
           method: 'POST',
+          mode: 'no-cors',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({ aba: 'Estoque_' + (store.name || ''), cabecalho: SHEET_ESTOQUE_HEADERS, linhas: linhas })
-        }).catch(function () {});
+          body: JSON.stringify({ aba: 'Estoque_' + SHEET_STOCK_STORE_KEY, cabecalho: SHEET_ESTOQUE_HEADERS, linhas: linhas })
+        }).catch(function (e) { console.error('Falha ao enviar estoque normal para a planilha:', e); });
       } catch (e) {}
     }
-    let _deliveryInitialSheetSyncComplete = false;
+    function loadStockMapFromSheet(loja) {
+      return new Promise(function (resolve, reject) {
+        var callbackName = '__stockDelivery_' + Date.now() + '_' + Math.floor(Math.random() * 1000000);
+        var script = document.createElement('script');
+        var timer = setTimeout(function () { cleanup(); reject(new Error('Tempo esgotado ao ler o estoque da planilha.')); }, 15000);
+        function cleanup() { clearTimeout(timer); delete window[callbackName]; if (script.parentNode) script.parentNode.removeChild(script); }
+        window[callbackName] = function (data) { cleanup(); resolve(data || {}); };
+        script.onerror = function () { cleanup(); reject(new Error('Não foi possível acessar o estoque da planilha.')); };
+        script.src = SHEET_WEBHOOK_URL + '?loja=' + encodeURIComponent(SHEET_STOCK_STORE_KEY) + '&callback=' + callbackName + '&_=' + Date.now();
+        document.head.appendChild(script);
+      });
+    }
     function pullStockFromSheet() {
       try {
-        fetch(SHEET_WEBHOOK_URL + '?loja=' + encodeURIComponent(store.name || ''), { method: 'GET' })
-          .then(function (r) { return r.json(); })
+        if (_deliveryStockSyncTimer || Date.now() - _deliveryLastStockChangeAt < 8000) return;
+        loadStockMapFromSheet(store.name || '')
           .then(function (mapa) {
             if (!mapa || typeof mapa !== 'object') return;
+            if (document.activeElement && /^owner-it-stock-/.test(document.activeElement.id || '')) return;
             var mudou = false;
             items.forEach(function (it) {
               if (!it || !it.name) return;
-              var v = mapa[String(it.name).trim()];
+              var nome = String(it.name).trim();
+              var chave = nome.toLocaleLowerCase() + '||' + String(it.category || '').trim().toLocaleLowerCase();
+              var v = mapa[chave] !== undefined ? mapa[chave] : mapa[nome];
               if (v !== undefined && v !== null && v !== '') {
                 var n = parseInt(v, 10);
                 if (!isNaN(n) && it.stock !== n) { it.stock = n; mudou = true; }
@@ -3978,18 +4583,17 @@
             if (mudou) {
               localStorage.setItem('DELIVERY_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items: items, store: store }));
               renderCatalog();
+              if (typeof renderOwnerMenuEditorTable === 'function') renderOwnerMenuEditorTable();
               if (typeof renderOwnerStockTable === 'function') renderOwnerStockTable();
-            }
-            if (!_deliveryInitialSheetSyncComplete) {
-              _deliveryInitialSheetSyncComplete = true;
-              sendStockToSheet('Sincronização inicial do cardápio normal');
             }
           })
           .catch(function () {});
       } catch (e) {}
     }
     setTimeout(pullStockFromSheet, 2000);
-    setInterval(pullStockFromSheet, 30000);
+    setInterval(function () { if (!document.hidden) pullStockFromSheet(); }, 3000);
+    window.addEventListener('focus', pullStockFromSheet);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) pullStockFromSheet(); });
 
     function submitOrderWhatsapp() {
       if (orderBlockedGuard()) return;
@@ -4023,7 +4627,7 @@
         }
       });
 
-      const fee = currentOrderType === 'delivery' ? Number(store.deliveryFee || 0) : 0;
+      const fee = currentOrderType === 'delivery' ? taxaEntregaAtual : 0;
       const finalTotal = subtotal + fee;
 
       let msg = \`*NOVO PEDIDO - \${store.name.toUpperCase()}*\\n\`;
@@ -4125,11 +4729,13 @@
       renderOwnerSalesList();
       populateOwnerStoreConfig();
 
-      const isStockUnlocked = store.stockModuleUnlocked !== false;
+      const isStockUnlocked = STOCK_MODULE_UNLOCKED;
+      document.getElementById('tab-del-btn-stock').innerHTML = '📦 Controle de Estoque' + (isStockUnlocked ? '' : ' 🔒');
       document.getElementById('owner-del-stock-locked').classList.toggle('hidden', isStockUnlocked);
       document.getElementById('owner-del-stock-content').classList.toggle('hidden', !isStockUnlocked);
 
-      const isSalesUnlocked = store.salesModuleUnlocked !== false;
+      const isSalesUnlocked = SALES_MODULE_UNLOCKED;
+      document.getElementById('tab-del-btn-sales').innerHTML = '📊 Controle de Vendas' + (isSalesUnlocked ? '' : ' 🔒');
       document.getElementById('owner-del-sales-locked').classList.toggle('hidden', isSalesUnlocked);
       document.getElementById('owner-del-sales-content').classList.toggle('hidden', !isSalesUnlocked);
 
@@ -4196,9 +4802,9 @@
 
     function getStockIndicatorEmoji(stock) {
       var amount = Number(stock);
-      if (!Number.isFinite(amount) || amount < 10) return '🔴';
-      if (amount > 20) return '🟢';
-      return '🟡';
+      if (!Number.isFinite(amount) || amount < 10) return 0;
+      if (amount > 20) return 2;
+      return 1;
     }
 
     function renderOwnerStockTable() {
@@ -4485,3 +5091,4 @@
   </script>
 </body>
 </html>
+
