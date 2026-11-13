@@ -1290,7 +1290,6 @@
         delete eventSelectedMap[id];
       }
       setSharedItems(getActiveItems().filter(x => String(x.id) !== String(id)));
-      // A remoção do item no editor não deve reenviar os estoques locais para a planilha.
       renderItemsList();
       renderAdminTable();
       renderSimulatorView();
@@ -1563,20 +1562,23 @@
       else if (field === 'stock') it.stock = value === '' ? 0 : Math.max(0, parseInt(value, 10) || 0);
       else it[field] = value;
 
-      if (field === 'stock') {
+      if (field === 'stock' || field === 'price') {
         _editorLastStockChangeAt = Date.now();
-        const signal = document.getElementById('admin-stock-signal-' + id);
-        if (signal) signal.style.color = getStockIndicatorColor(it.stock);
+        if (field === 'stock') {
+          const signal = document.getElementById('admin-stock-signal-' + id);
+          if (signal) signal.style.color = getStockIndicatorColor(it.stock);
+        }
       }
 
       setSharedItems(list);
 
-      if (field === 'stock') agendarEnvioEstoqueEditor([it]);
+      if (field === 'stock' || field === 'price') agendarEnvioEstoqueEditor([it]);
 
       renderSimulatorView();
       renderItemsList();
     }
 
+    const EDITOR_SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbyRtP0JthK_60x6Dzt7dMuLTcUWWjokTn93tRAh2vwLqe_lCqMbgUGJaIt1rYzPhwgC/exec';
     let _estoqueSyncTimer = null;
     let _editorLastStockChangeAt = 0;
     let _editorStockDirtyKeys = new Set();
@@ -1610,16 +1612,17 @@
           const dataHora = pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
           const linhas = [];
           lista.forEach(it => { if (it && it.name) linhas.push([dataHora, loja, String(it.name), Number(it.stock || 0), 'Edição do Proprietário', '', String(it.category || ''), Number(it.price || 0)]); });
-          fetch('https://script.google.com/macros/s/AKfycbyRtP0JthK_60x6Dzt7dMuLTcUWWjokTn93tRAh2vwLqe_lCqMbgUGJaIt1rYzPhwgC/exec', {
+          fetch(EDITOR_SHEET_WEBHOOK_URL, {
             method: 'POST',
             mode: 'no-cors',
+            keepalive: true,
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
             body: JSON.stringify({ aba: 'Estoque_' + nomeAbaEstoqueEditor(loja, currentCatalogMode), cabecalho: ['Data/Hora', 'Estabelecimento', 'Item', 'Estoque Restante', 'Motivo', 'Sinalizador', 'Categoria', 'Preço'], linhas: linhas })
           }).then(function () {
             lista.forEach(function (it) {
               const chave = chaveEstoqueEditor(it);
               const atual = _editorStockPushQueue.get(chave);
-              if (atual && Number(atual.stock) === Number(it.stock)) {
+              if (atual && Number(atual.stock) === Number(it.stock) && Number(atual.price) === Number(it.price)) {
                 _editorStockPushQueue.delete(chave);
                 _editorStockDirtyKeys.delete(chave);
               }
@@ -1629,7 +1632,7 @@
       }, 900);
     }
 
-    function loadStockMapFromSheetEditor(loja) {
+    function loadStockMapJsonpFromSheetEditor(loja) {
       return new Promise(function (resolve, reject) {
         const callbackName = '__stockEditor_' + Date.now() + '_' + Math.floor(Math.random() * 1000000);
         const script = document.createElement('script');
@@ -1637,10 +1640,26 @@
         function cleanup() { clearTimeout(timer); delete window[callbackName]; if (script.parentNode) script.parentNode.removeChild(script); }
         window[callbackName] = function (data) { cleanup(); resolve(data || {}); };
         script.onerror = function () { cleanup(); reject(new Error('Não foi possível acessar o estoque da planilha.')); };
-        script.src = 'https://script.google.com/macros/s/AKfycbyRtP0JthK_60x6Dzt7dMuLTcUWWjokTn93tRAh2vwLqe_lCqMbgUGJaIt1rYzPhwgC/exec?loja=' + encodeURIComponent(loja) + '&callback=' + callbackName + '&_=' + Date.now();
+        script.src = EDITOR_SHEET_WEBHOOK_URL + '?loja=' + encodeURIComponent(loja) + '&callback=' + callbackName + '&_=' + Date.now();
         document.head.appendChild(script);
       });
     }
+
+    function loadStockMapFromSheetEditor(loja) {
+      const urlJson = EDITOR_SHEET_WEBHOOK_URL + '?loja=' + encodeURIComponent(loja) + '&_=' + Date.now();
+      if (typeof fetch === 'function') {
+        return fetch(urlJson, { cache: 'no-store' })
+          .then(function (res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+          })
+          .catch(function () {
+            return loadStockMapJsonpFromSheetEditor(loja);
+          });
+      }
+      return loadStockMapJsonpFromSheetEditor(loja);
+    }
+
     function pullStockFromSheetEditor() {
       try {
         if (_editorStockPullInFlight || _estoqueSyncTimer || _editorStockPushQueue.size || Date.now() - _editorLastStockChangeAt < 8000) return;
@@ -1655,30 +1674,34 @@
             if (currentCatalogMode !== modoAtual) return;
             const lista = getActiveItems();
             let mudou = false;
-            const campoEstoqueEmEdicao = document.activeElement && document.activeElement.matches('input[type="number"]')
-              && document.activeElement.getAttribute('oninput')
-              && document.activeElement.getAttribute('oninput').includes("'stock'");
-            if (campoEstoqueEmEdicao) return;
+            const campoAdminEmEdicao = document.activeElement && document.activeElement.closest && document.activeElement.closest('#admin-table-container');
+            if (campoAdminEmEdicao) return;
+            const metaByKey = (mapa.__meta && mapa.__meta.byKey) || {};
+            const metaByName = (mapa.__meta && mapa.__meta.byName) || {};
             lista.forEach(function (it) {
               if (!it || !it.name) return;
               const nome = String(it.name).trim();
               const chave = chaveEstoqueEditor(it);
               if (_editorStockDirtyKeys.has(chave)) return;
               let v = mapa[chave] !== undefined ? mapa[chave] : mapa[nome];
+              let meta = metaByKey[chave] || metaByName[nome] || null;
               if (v === undefined) {
                 const nomeNormalizado = nome.toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
-                const chaveNome = Object.keys(mapa).find(k => String(k).toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '') === nomeNormalizado);
+                const chaveNome = Object.keys(mapa).find(k => !k.startsWith('__') && String(k).toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '') === nomeNormalizado);
                 if (chaveNome !== undefined) v = mapa[chaveNome];
               }
               if (v !== undefined && v !== null && v !== '') {
                 const n = parseInt(v, 10);
                 if (!isNaN(n) && it.stock !== n) { it.stock = n; mudou = true; }
               }
+              if (meta && meta.preco !== null && meta.preco !== undefined && isFinite(Number(meta.preco))) {
+                const p = Math.round(Number(meta.preco) * 100) / 100;
+                if (Math.abs(Number(it.price || 0) - p) > 0.001) { it.price = p; mudou = true; }
+              }
             });
             if (mudou) {
               setSharedItems(lista);
-              const adminVisivel = document.getElementById('tab-content-admin') && !document.getElementById('tab-content-admin').classList.contains('hidden');
-              if (!adminVisivel) renderAdminTable();
+              renderAdminTable();
               renderSimulatorView();
               renderItemsList();
             }
@@ -2416,6 +2439,7 @@
       const active = isEvent ? eventStore : standardStore;
       const curItems = isEvent ? eventItems : standardItems;
       const safeToken = btoa(unescape(encodeURIComponent(active.adminPassword || '1234')));
+      const buildSignature = String(Date.now());
 
       const storeData = Object.assign({}, active, {
         salesModuleUnlocked: active.salesModuleUnlocked !== false,
@@ -2830,16 +2854,22 @@
     const SALES_MODULE_UNLOCKED = ${storeData.salesModuleUnlocked !== false};
     const CEP_DELIVERY_CONFIG = { baseCep: ${JSON.stringify(storeData.baseCep || '')}, deliveryKmBase: ${Number(storeData.deliveryKmBase || 0)}, deliveryExtraKmRate: ${Number(storeData.deliveryExtraKmRate || 0)} };
     const OH_SCHEDULE = ${ohSchedulePayload};
+    const BUILD_SIGNATURE = ${JSON.stringify(buildSignature)};
     let selectedCategory = 'all';
     let chosenEventItems = {};
     let clientClicks = 0;
 
-    const savedCustom = localStorage.getItem('BUFFET_CUSTOM_' + (store.name || 'STORE'));
+    const savedCustomKey = 'BUFFET_CUSTOM_' + (store.name || 'STORE');
+    const savedCustom = localStorage.getItem(savedCustomKey);
     if (savedCustom) {
       try {
         const parsed = JSON.parse(savedCustom);
-        if (parsed.items) items = parsed.items;
-        if (parsed.store) store = Object.assign({}, store, parsed.store);
+        if (parsed && parsed.buildSignature === BUILD_SIGNATURE) {
+          if (parsed.items) items = parsed.items;
+          if (parsed.store) store = Object.assign({}, store, parsed.store);
+        } else {
+          localStorage.removeItem(savedCustomKey);
+        }
       } catch(e){}
     }
     store.stockModuleUnlocked = STOCK_MODULE_UNLOCKED;
@@ -2847,6 +2877,12 @@
     store.baseCep = CEP_DELIVERY_CONFIG.baseCep;
     store.deliveryKmBase = CEP_DELIVERY_CONFIG.deliveryKmBase;
     store.deliveryExtraKmRate = CEP_DELIVERY_CONFIG.deliveryExtraKmRate;
+
+    function saveBuffetCustomState() {
+      try {
+        localStorage.setItem('BUFFET_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ buildSignature: BUILD_SIGNATURE, items: items, store: store }));
+      } catch(e){}
+    }
 
     function checkExpiration() {
       if (store.expirationDate) {
@@ -3058,6 +3094,12 @@
     }
 
     function toggleChoice(id) {
+      const it = items.find(x => String(x.id) === String(id));
+      const isOutOfStock = it && it.stock !== undefined && it.stock !== null && Number(it.stock) <= 0;
+      if (isOutOfStock && !chosenEventItems[id]) {
+        alert('Este item está esgotado no momento.');
+        return;
+      }
       if (chosenEventItems[id]) {
         delete chosenEventItems[id];
       } else {
@@ -3076,23 +3118,29 @@
       const listContainer = document.getElementById('catalog-list');
       const filtered = items.filter(x => selectedCategory === 'all' || x.category === selectedCategory);
       listContainer.innerHTML = filtered.map(it => {
-        const isChosen = !!chosenEventItems[it.id];
+        const isOutOfStock = it.stock !== undefined && it.stock !== null && Number(it.stock) <= 0;
+        if (isOutOfStock && chosenEventItems[it.id]) delete chosenEventItems[it.id];
+        const isChosen = !isOutOfStock && !!chosenEventItems[it.id];
         return \`
-          <div class="rounded-xl \${isChosen ? 'bg-[#251d19] border-amber-500 shadow-md' : 'bg-[#1c1613] border-stone-800'} border p-2.5 flex gap-2.5 items-center transition-all">
+          <div class="rounded-xl \${isChosen ? 'bg-[#251d19] border-amber-500 shadow-md' : 'bg-[#1c1613] border-stone-800'} border p-2.5 flex gap-2.5 items-center transition-all \${isOutOfStock ? 'opacity-75' : ''}">
             <img src="\${it.image}" class="w-14 h-14 rounded-lg object-cover bg-stone-900 shrink-0">
             <div class="flex-1 min-w-0">
-              <h4 class="font-bold text-white text-xs truncate">\${it.name}</h4>
+              <div class="flex items-center gap-1.5">
+                <h4 class="font-bold text-white text-xs truncate">\${it.name}</h4>
+                \${isOutOfStock ? '<span class="text-[9px] bg-rose-950/80 text-rose-400 border border-rose-500/30 px-1.5 py-0.5 rounded font-bold shrink-0">Esgotado</span>' : ''}
+              </div>
               <p class="text-[10px] text-stone-400 line-clamp-1 mt-0.5">\${it.description || ''}</p>
               <div class="flex items-center justify-between mt-1">
                 <span class="text-amber-500 font-black text-xs">R$ \${Number(it.price).toFixed(2).replace('.', ',')}</span>
-                <button type="button" onclick="toggleChoice('\${it.id}')" class="px-2.5 py-1 rounded-lg text-[10px] font-black cursor-pointer transition \${isChosen ? 'bg-amber-600 text-white shadow' : 'border border-stone-600 text-stone-300 hover:border-amber-500'}">
-                  \${isChosen ? '✓ Escolhido' : '+ Escolher'}
+                <button type="button" \${isOutOfStock ? 'disabled' : ''} onclick="toggleChoice('\${it.id}')" class="px-2.5 py-1 rounded-lg text-[10px] font-black transition \${isOutOfStock ? 'bg-stone-800 text-stone-500 border border-stone-700 cursor-not-allowed' : (isChosen ? 'bg-amber-600 text-white shadow cursor-pointer' : 'border border-stone-600 text-stone-300 hover:border-amber-500 cursor-pointer')}">
+                  \${isOutOfStock ? 'Esgotado' : (isChosen ? '✓ Escolhido' : '+ Escolher')}
                 </button>
               </div>
             </div>
           </div>
         \`;
       }).join('');
+      updateChosenPill();
     }
 
     function renderCategories() {
@@ -3132,6 +3180,8 @@
       var mData = String(msg).match(/\\b(\\d{2})\\/(\\d{2})\\/(\\d{4})\\b/);
       if (mData) res.data = mData[3] + '-' + mData[2] + '-' + mData[1];
       var mHora = String(msg).match(/\\b(\\d{1,2}):(\\d{2})\\b/);
+      if (mHora) res.hora = ('0' + mHora[1]).slice(-2) + ':' + mHora[2];
+	  var mHora = String(msg).match(/\\b(\\d{1,2}):(\\d{2})\\b/);
       if (mHora) res.hora = ('0' + mHora[1]).slice(-2) + ':' + mHora[2];
       var mConv = texto.match(/(\\d+)\\s*(?:convidados|pessoas|participantes)/) || texto.match(/(?:convidados|pessoas)\\D{0,12}(\\d+)/);
       if (mConv) res.convidados = parseInt(mConv[1], 10);
@@ -3256,9 +3306,11 @@
       try {
         fetch(SHEET_WEBHOOK_URL, {
           method: 'POST',
+          mode: 'no-cors',
+          keepalive: true,
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify({ aba: aba, cabecalho: cabecalho, linhas: linhas })
-        }).catch(function () {});
+        }).catch(function (e) { console.error('Falha ao enviar proposta para a planilha:', e); });
       } catch (e) {}
     }
 
@@ -3269,7 +3321,7 @@
       clearTimeout(_eventStockSyncTimer);
       _eventStockSyncTimer = setTimeout(function () {
         _eventStockSyncTimer = null;
-        localStorage.setItem('BUFFET_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items, store }));
+        saveBuffetCustomState();
         sendStockToSheet(motivo || 'Atualização em tempo real');
       }, 500);
     }
@@ -3287,12 +3339,13 @@
         fetch(SHEET_WEBHOOK_URL, {
           method: 'POST',
           mode: 'no-cors',
+          keepalive: true,
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify({ aba: 'Estoque_' + SHEET_STOCK_STORE_KEY, cabecalho: SHEET_ESTOQUE_HEADERS, linhas: linhas })
         }).catch(function (e) { console.error('Falha ao enviar estoque evento para a planilha:', e); });
       } catch (e) {}
     }
-    function loadStockMapFromSheet(loja) {
+    function loadStockMapJsonpFromSheet(chaveLoja) {
       return new Promise(function (resolve, reject) {
         var callbackName = '__stockEvent_' + Date.now() + '_' + Math.floor(Math.random() * 1000000);
         var script = document.createElement('script');
@@ -3300,9 +3353,27 @@
         function cleanup() { clearTimeout(timer); delete window[callbackName]; if (script.parentNode) script.parentNode.removeChild(script); }
         window[callbackName] = function (data) { cleanup(); resolve(data || {}); };
         script.onerror = function () { cleanup(); reject(new Error('Não foi possível acessar o estoque da planilha.')); };
-        script.src = SHEET_WEBHOOK_URL + '?loja=' + encodeURIComponent(SHEET_STOCK_STORE_KEY) + '&callback=' + callbackName + '&_=' + Date.now();
+        script.src = SHEET_WEBHOOK_URL + '?loja=' + encodeURIComponent(chaveLoja) + '&callback=' + callbackName + '&_=' + Date.now();
         document.head.appendChild(script);
       });
+    }
+    function loadStockMapFromSheet(loja) {
+      var chaveLoja = (store.name || '') + '__EVENTO';
+      var urlJson = SHEET_WEBHOOK_URL + '?loja=' + encodeURIComponent(chaveLoja) + '&_=' + Date.now();
+      if (typeof fetch === 'function') {
+        return fetch(urlJson, { cache: 'no-store' })
+          .then(function (res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+          })
+          .catch(function () {
+            return loadStockMapJsonpFromSheet(chaveLoja);
+          });
+      }
+      return loadStockMapJsonpFromSheet(chaveLoja);
+    }
+    function normStockKey(s) {
+      return String(s || '').toLocaleLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').replace(/[^a-z0-9]/g, '');
     }
     function pullStockFromSheet() {
       try {
@@ -3310,20 +3381,32 @@
         loadStockMapFromSheet(store.name || '')
           .then(function (mapa) {
             if (!mapa || typeof mapa !== 'object') return;
-            if (document.activeElement && /^owner-it-stock-/.test(document.activeElement.id || '')) return;
+            if (document.activeElement && /^owner-it-(stock|name|price)-/.test(document.activeElement.id || '')) return;
+            var metaByKey = (mapa.__meta && mapa.__meta.byKey) || {};
+            var metaByName = (mapa.__meta && mapa.__meta.byName) || {};
             var mudou = false;
             items.forEach(function (it) {
               if (!it || !it.name) return;
               var nome = String(it.name).trim();
               var chave = nome.toLocaleLowerCase() + '||' + String(it.category || '').trim().toLocaleLowerCase();
               var v = mapa[chave] !== undefined ? mapa[chave] : mapa[nome];
+              var meta = metaByKey[chave] || metaByName[nome] || null;
+              if (v === undefined) {
+                var nomeNorm = normStockKey(nome);
+                var chaveAlt = Object.keys(mapa).find(function (k) { return k.indexOf('__') !== 0 && normStockKey(k) === nomeNorm; });
+                if (chaveAlt !== undefined) v = mapa[chaveAlt];
+              }
               if (v !== undefined && v !== null && v !== '') {
                 var n = parseInt(v, 10);
                 if (!isNaN(n) && it.stock !== n) { it.stock = n; mudou = true; }
               }
+              if (meta && meta.preco !== null && meta.preco !== undefined && isFinite(Number(meta.preco))) {
+                var p = Math.round(Number(meta.preco) * 100) / 100;
+                if (Math.abs(Number(it.price || 0) - p) > 0.001) { it.price = p; mudou = true; }
+              }
             });
             if (mudou) {
-              localStorage.setItem('BUFFET_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items: items, store: store }));
+              saveBuffetCustomState();
               renderCatalog();
               if (typeof renderOwnerMenuEditorTable === 'function') renderOwnerMenuEditorTable();
               if (typeof renderOwnerStockTable === 'function') renderOwnerStockTable();
@@ -3332,7 +3415,7 @@
           .catch(function (e) { console.error('Falha ao ler estoque do evento na planilha:', e); });
       } catch (e) {}
     }
-    setTimeout(pullStockFromSheet, 2000);
+    setTimeout(pullStockFromSheet, 1500);
     setInterval(function () { if (!document.hidden) pullStockFromSheet(); }, 3000);
     window.addEventListener('focus', pullStockFromSheet);
     document.addEventListener('visibilitychange', function () { if (!document.hidden) pullStockFromSheet(); });
@@ -3567,7 +3650,8 @@
         if (stockEl) it.stock = parseInt(stockEl.value, 10) || 0;
       });
 
-      localStorage.setItem('BUFFET_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items, store }));
+      _eventLastStockChangeAt = Date.now();
+      saveBuffetCustomState();
       sendStockToSheet('Edição do Proprietário');
       renderCatalog();
       renderOwnerMenuEditorTable();
@@ -3622,7 +3706,7 @@
       store.deliveryExtraKmRate = parseFloat(document.getElementById('owner-cfg-km-rate').value) || 0;
       store.pickupAddress = document.getElementById('owner-cfg-address').value.trim() || store.pickupAddress;
 
-      localStorage.setItem('BUFFET_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items, store }));
+      saveBuffetCustomState();
       alert('✅ Dados salvos com sucesso!');
       location.reload();
     }
@@ -4076,17 +4160,23 @@
     const SALES_MODULE_UNLOCKED = ${storeData.salesModuleUnlocked !== false};
     const CEP_DELIVERY_CONFIG = { baseCep: ${JSON.stringify(storeData.baseCep || '')}, deliveryKmBase: ${Number(storeData.deliveryKmBase || 0)}, deliveryExtraKmRate: ${Number(storeData.deliveryExtraKmRate || 0)} };
     const OH_SCHEDULE = ${ohSchedulePayload};
+    const BUILD_SIGNATURE = ${JSON.stringify(buildSignature)};
     let cart = {};
     let selectedCategory = 'Todos';
     let currentOrderType = 'delivery';
     let clientClicks = 0;
 
-    const savedCustom = localStorage.getItem('DELIVERY_CUSTOM_' + (store.name || 'STORE'));
+    const savedCustomKey = 'DELIVERY_CUSTOM_' + (store.name || 'STORE');
+    const savedCustom = localStorage.getItem(savedCustomKey);
     if (savedCustom) {
       try {
         const parsed = JSON.parse(savedCustom);
-        if (parsed.items) items = parsed.items;
-        if (parsed.store) store = Object.assign({}, store, parsed.store);
+        if (parsed && parsed.buildSignature === BUILD_SIGNATURE) {
+          if (parsed.items) items = parsed.items;
+          if (parsed.store) store = Object.assign({}, store, parsed.store);
+        } else {
+          localStorage.removeItem(savedCustomKey);
+        }
       } catch(e){}
     }
     store.stockModuleUnlocked = STOCK_MODULE_UNLOCKED;
@@ -4094,6 +4184,12 @@
     store.baseCep = CEP_DELIVERY_CONFIG.baseCep;
     store.deliveryKmBase = CEP_DELIVERY_CONFIG.deliveryKmBase;
     store.deliveryExtraKmRate = CEP_DELIVERY_CONFIG.deliveryExtraKmRate;
+
+    function saveDeliveryCustomState() {
+      try {
+        localStorage.setItem('DELIVERY_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ buildSignature: BUILD_SIGNATURE, items: items, store: store }));
+      } catch(e){}
+    }
 
     function checkExpiration() {
       if (store.expirationDate) {
@@ -4515,20 +4611,22 @@
       try {
         fetch(SHEET_WEBHOOK_URL, {
           method: 'POST',
+          mode: 'no-cors',
+          keepalive: true,
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify({ aba: aba, cabecalho: cabecalho, linhas: linhas })
-        }).catch(function () {});
+        }).catch(function (e) { console.error('Falha ao enviar pedido para a planilha:', e); });
       } catch (e) {}
     }
 
-        let _deliveryStockSyncTimer = null;
+    let _deliveryStockSyncTimer = null;
     let _deliveryLastStockChangeAt = 0;
     function scheduleDeliveryStockSync() {
       _deliveryLastStockChangeAt = Date.now();
       clearTimeout(_deliveryStockSyncTimer);
       _deliveryStockSyncTimer = setTimeout(function () {
         _deliveryStockSyncTimer = null;
-        localStorage.setItem('DELIVERY_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items: items, store: store }));
+        saveDeliveryCustomState();
         sendStockToSheet('Atualização de estoque em tempo real');
       }, 500);
     }
@@ -4545,12 +4643,13 @@
         fetch(SHEET_WEBHOOK_URL, {
           method: 'POST',
           mode: 'no-cors',
+          keepalive: true,
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify({ aba: 'Estoque_' + SHEET_STOCK_STORE_KEY, cabecalho: SHEET_ESTOQUE_HEADERS, linhas: linhas })
         }).catch(function (e) { console.error('Falha ao enviar estoque normal para a planilha:', e); });
       } catch (e) {}
     }
-    function loadStockMapFromSheet(loja) {
+    function loadStockMapJsonpFromSheet(chaveLoja) {
       return new Promise(function (resolve, reject) {
         var callbackName = '__stockDelivery_' + Date.now() + '_' + Math.floor(Math.random() * 1000000);
         var script = document.createElement('script');
@@ -4558,9 +4657,27 @@
         function cleanup() { clearTimeout(timer); delete window[callbackName]; if (script.parentNode) script.parentNode.removeChild(script); }
         window[callbackName] = function (data) { cleanup(); resolve(data || {}); };
         script.onerror = function () { cleanup(); reject(new Error('Não foi possível acessar o estoque da planilha.')); };
-        script.src = SHEET_WEBHOOK_URL + '?loja=' + encodeURIComponent(SHEET_STOCK_STORE_KEY) + '&callback=' + callbackName + '&_=' + Date.now();
+        script.src = SHEET_WEBHOOK_URL + '?loja=' + encodeURIComponent(chaveLoja) + '&callback=' + callbackName + '&_=' + Date.now();
         document.head.appendChild(script);
       });
+    }
+    function loadStockMapFromSheet(loja) {
+      var chaveLoja = (store.name || '') + '__NORMAL';
+      var urlJson = SHEET_WEBHOOK_URL + '?loja=' + encodeURIComponent(chaveLoja) + '&_=' + Date.now();
+      if (typeof fetch === 'function') {
+        return fetch(urlJson, { cache: 'no-store' })
+          .then(function (res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+          })
+          .catch(function () {
+            return loadStockMapJsonpFromSheet(chaveLoja);
+          });
+      }
+      return loadStockMapJsonpFromSheet(chaveLoja);
+    }
+    function normStockKey(s) {
+      return String(s || '').toLocaleLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').replace(/[^a-z0-9]/g, '');
     }
     function pullStockFromSheet() {
       try {
@@ -4568,29 +4685,49 @@
         loadStockMapFromSheet(store.name || '')
           .then(function (mapa) {
             if (!mapa || typeof mapa !== 'object') return;
-            if (document.activeElement && /^owner-it-stock-/.test(document.activeElement.id || '')) return;
+            if (document.activeElement && /^owner-it-(stock|name|price)-/.test(document.activeElement.id || '')) return;
+            var metaByKey = (mapa.__meta && mapa.__meta.byKey) || {};
+            var metaByName = (mapa.__meta && mapa.__meta.byName) || {};
             var mudou = false;
             items.forEach(function (it) {
               if (!it || !it.name) return;
               var nome = String(it.name).trim();
               var chave = nome.toLocaleLowerCase() + '||' + String(it.category || '').trim().toLocaleLowerCase();
               var v = mapa[chave] !== undefined ? mapa[chave] : mapa[nome];
+              var meta = metaByKey[chave] || metaByName[nome] || null;
+              if (v === undefined) {
+                var nomeNorm = normStockKey(nome);
+                var chaveAlt = Object.keys(mapa).find(function (k) { return k.indexOf('__') !== 0 && normStockKey(k) === nomeNorm; });
+                if (chaveAlt !== undefined) v = mapa[chaveAlt];
+              }
               if (v !== undefined && v !== null && v !== '') {
                 var n = parseInt(v, 10);
-                if (!isNaN(n) && it.stock !== n) { it.stock = n; mudou = true; }
+                if (!isNaN(n) && it.stock !== n) {
+                  it.stock = n;
+                  if (cart[it.id] && cart[it.id] > n) {
+                    if (n <= 0) delete cart[it.id];
+                    else cart[it.id] = n;
+                  }
+                  mudou = true;
+                }
+              }
+              if (meta && meta.preco !== null && meta.preco !== undefined && isFinite(Number(meta.preco))) {
+                var p = Math.round(Number(meta.preco) * 100) / 100;
+                if (Math.abs(Number(it.price || 0) - p) > 0.001) { it.price = p; mudou = true; }
               }
             });
             if (mudou) {
-              localStorage.setItem('DELIVERY_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items: items, store: store }));
+              saveDeliveryCustomState();
               renderCatalog();
+              updateTotal();
               if (typeof renderOwnerMenuEditorTable === 'function') renderOwnerMenuEditorTable();
               if (typeof renderOwnerStockTable === 'function') renderOwnerStockTable();
             }
           })
-          .catch(function () {});
+          .catch(function (e) { console.error('Falha ao ler estoque normal na planilha:', e); });
       } catch (e) {}
     }
-    setTimeout(pullStockFromSheet, 2000);
+    setTimeout(pullStockFromSheet, 1500);
     setInterval(function () { if (!document.hidden) pullStockFromSheet(); }, 3000);
     window.addEventListener('focus', pullStockFromSheet);
     document.addEventListener('visibilitychange', function () { if (!document.hidden) pullStockFromSheet(); });
@@ -4664,7 +4801,8 @@
         timestamp: \`\${now.toLocaleDateString('pt-BR')} \${now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}\`
       });
       localStorage.setItem('DELIVERY_ORDERS_' + (store.name || 'STORE'), JSON.stringify(existingOrders));
-      localStorage.setItem('DELIVERY_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items, store }));
+      _deliveryLastStockChangeAt = Date.now();
+      saveDeliveryCustomState();
 
       const padN = n => String(n).padStart(2, '0');
       const dataHora = padN(now.getDate()) + '/' + padN(now.getMonth() + 1) + '/' + now.getFullYear() + ' ' + padN(now.getHours()) + ':' + padN(now.getMinutes()) + ':' + padN(now.getSeconds());
@@ -4844,7 +4982,8 @@
         if (stockEl) it.stock = parseInt(stockEl.value, 10) || 0;
       });
 
-      localStorage.setItem('DELIVERY_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items, store }));
+      _deliveryLastStockChangeAt = Date.now();
+      saveDeliveryCustomState();
       sendStockToSheet('Edição do Proprietário');
       renderCatalog();
       renderOwnerMenuEditorTable();
@@ -4901,7 +5040,7 @@
       store.deliveryTime = document.getElementById('owner-cfg-time').value.trim() || store.deliveryTime;
       store.pickupAddress = document.getElementById('owner-cfg-address').value.trim() || store.pickupAddress;
 
-      localStorage.setItem('DELIVERY_CUSTOM_' + (store.name || 'STORE'), JSON.stringify({ items, store }));
+      saveDeliveryCustomState();
       alert('✅ Dados da loja salvos com sucesso!');
       location.reload();
     }
@@ -5091,4 +5230,3 @@
   </script>
 </body>
 </html>
-
