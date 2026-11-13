@@ -404,6 +404,11 @@
                   <input id="cfg-dev-url" type="text" placeholder="URL de Destino" class="w-full bg-[#060b14] border border-[#1e293b] text-white px-3 py-2 text-sm rounded-lg outline-none">
                 </div>
               </div>
+			  <div class="sm:col-span-2 bg-[#090d16] p-3.5 rounded-xl border border-emerald-500/30 space-y-2">
+                <label class="block text-xs font-black text-emerald-400">📊 URL do Google Apps Script (Sincronização Google Sheets)</label>
+                <input id="cfg-sheet-url" type="url" placeholder="https://script.google.com/macros/s/.../exec" class="w-full bg-[#060b14] border border-[#1e293b] text-white px-3 py-2 text-xs rounded-lg outline-none font-mono focus:border-emerald-500">
+                <p class="text-[10px] text-slate-400">Cole aqui a URL /exec da sua implantação do Apps Script. Será herdada automaticamente no HTML exportado.</p>
+              </div>
             </div>
 
             <div class="flex justify-end pt-2">
@@ -462,7 +467,10 @@
               </h2>
               <p class="text-xs text-slate-400">Edite imagem, nome, categoria, preço e estoque diretamente nas colunas.</p>
             </div>
-            <span id="admin-active-catalog-badge" class="text-xs bg-red-950/60 border border-red-500/40 text-red-400 px-3 py-1 rounded-xl font-bold"></span>
+            <div class="flex items-center gap-2 flex-wrap">
+              <button type="button" onclick="syncAllItemsToSheetNow(true)" class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black rounded-xl shadow cursor-pointer">🔄 Sincronizar Estoque com a Planilha</button>
+              <span id="admin-active-catalog-badge" class="text-xs bg-red-950/60 border border-red-500/40 text-red-400 px-3 py-1 rounded-xl font-bold"></span>
+            </div>
           </div>
 
           <div class="overflow-x-auto">
@@ -761,6 +769,12 @@
     let simLogoClicks = 0;
     let simLogoTimer = null;
     let isAdminAuthenticated = false;
+	const DEFAULT_SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbyRtP0JthK_60x6Dzt7dMuLTcUWWjokTn93tRAh2vwLqe_lCqMbgUGJaIt1rYzPhwgC/exec';
+    function getActiveSheetWebhookUrl(st) {
+      const storeObj = st || getActiveStore();
+      const u = String((storeObj && storeObj.sheetWebhookUrl) || '').trim();
+      return u || DEFAULT_SHEET_WEBHOOK_URL;
+    }
 
     let standardStore = {
       name: "PRADO BURGUER",
